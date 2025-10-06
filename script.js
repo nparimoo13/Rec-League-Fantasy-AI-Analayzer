@@ -1,0 +1,704 @@
+// Fantasy Football Team & Trade Analyzer JavaScript
+
+document.addEventListener('DOMContentLoaded', function() {
+    // Initialize the application
+    initializeApp();
+});
+
+function initializeApp() {
+    setupLeagueSettings();
+    setupTradeAnalyzer();
+    setupPlayerInteractions();
+}
+
+// League Settings Functionality
+function setupLeagueSettings() {
+    const manualToggle = document.getElementById('manualMode');
+    const manualSettings = document.getElementById('manualSettings');
+    
+    // Toggle manual settings visibility
+    manualToggle.addEventListener('change', function() {
+        if (this.checked) {
+            manualSettings.style.display = 'block';
+            manualSettings.style.animation = 'fadeIn 0.3s ease-in';
+        } else {
+            manualSettings.style.display = 'none';
+        }
+    });
+    
+    // Provider button interactions
+    const providerButtons = document.querySelectorAll('.provider-btn');
+    providerButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            // Remove active class from all buttons
+            providerButtons.forEach(btn => btn.classList.remove('active'));
+            // Add active class to clicked button
+            this.classList.add('active');
+            
+            // Show connection modal or API integration
+            showProviderConnection(this.textContent.trim());
+        });
+    });
+    
+    // League settings change handlers
+    const scoringFormat = document.getElementById('scoringFormat');
+    const leagueType = document.getElementById('leagueType');
+    const superflex = document.getElementById('superflex');
+    
+    [scoringFormat, leagueType, superflex].forEach(element => {
+        element.addEventListener('change', updateLeagueSettings);
+    });
+}
+
+function showProviderConnection(provider) {
+    // Create a simple modal for provider connection
+    const modal = document.createElement('div');
+    modal.className = 'connection-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h3>Connect to ${provider}</h3>
+            <p>This feature will be available soon! For now, please use manual settings.</p>
+            <button class="close-modal">Close</button>
+        </div>
+    `;
+    
+    // Add modal styles
+    const style = document.createElement('style');
+    style.textContent = `
+        .connection-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .modal-content {
+            background: #1a1a2e;
+            padding: 30px;
+            border-radius: 15px;
+            border: 2px solid #4a9eff;
+            text-align: center;
+            max-width: 400px;
+        }
+        .modal-content h3 {
+            color: #4a9eff;
+            margin-bottom: 15px;
+        }
+        .modal-content p {
+            color: #b0b0b0;
+            margin-bottom: 20px;
+        }
+        .close-modal {
+            background: #4a9eff;
+            color: #1a1a2e;
+            border: none;
+            padding: 10px 20px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+        }
+        .close-modal:hover {
+            background: #6bb6ff;
+        }
+    `;
+    
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    
+    // Close modal functionality
+    modal.querySelector('.close-modal').addEventListener('click', () => {
+        document.body.removeChild(modal);
+        document.head.removeChild(style);
+    });
+    
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        }
+    });
+}
+
+function updateLeagueSettings() {
+    const settings = {
+        scoringFormat: document.getElementById('scoringFormat').value,
+        leagueType: document.getElementById('leagueType').value,
+        superflex: document.getElementById('superflex').checked
+    };
+    
+    console.log('League settings updated:', settings);
+    
+    // Here you would typically save settings to localStorage or send to server
+    localStorage.setItem('leagueSettings', JSON.stringify(settings));
+    
+    // Show a subtle notification
+    showNotification('League settings saved!', 'success');
+}
+
+// Trade Analyzer Functionality
+function setupTradeAnalyzer() {
+    const myTeamSearch = document.getElementById('myTeamSearch');
+    const opponentSearch = document.getElementById('opponentSearch');
+    const analyzeBtn = document.querySelector('.analyze-btn');
+    
+    // Search functionality for both lists
+    myTeamSearch.addEventListener('input', function() {
+        filterPlayerList('myTeamList', this.value);
+    });
+    
+    opponentSearch.addEventListener('input', function() {
+        filterPlayerList('opponentList', this.value);
+    });
+    
+    // Analyze trade button
+    analyzeBtn.addEventListener('click', analyzeTrade);
+    
+    // Add player functionality
+    setupAddPlayerButtons();
+}
+
+function filterPlayerList(listId, searchTerm) {
+    const list = document.getElementById(listId);
+    const items = list.querySelectorAll('.list-item');
+    
+    items.forEach(item => {
+        const playerName = item.querySelector('h5').textContent.toLowerCase();
+        const position = item.querySelector('p').textContent.toLowerCase();
+        const searchLower = searchTerm.toLowerCase();
+        
+        if (playerName.includes(searchLower) || position.includes(searchLower)) {
+            item.style.display = 'flex';
+        } else {
+            item.style.display = 'none';
+        }
+    });
+}
+
+function setupAddPlayerButtons() {
+    const addButtons = document.querySelectorAll('.add-btn');
+    
+    addButtons.forEach(button => {
+        button.addEventListener('click', function() {
+            const listItem = this.closest('.list-item');
+            const playerName = listItem.querySelector('h5').textContent;
+            const playerPosition = listItem.querySelector('p').textContent;
+            const playerRating = listItem.querySelector('.rating').textContent;
+            
+            // Add to trade analysis
+            addPlayerToTrade(listItem, playerName, playerPosition, playerRating);
+            
+            // Update button state
+            this.textContent = '✓';
+            this.style.background = '#00d4aa';
+            this.disabled = true;
+        });
+    });
+}
+
+function addPlayerToTrade(listItem, name, position, rating) {
+    // Create trade analysis container if it doesn't exist
+    let tradeAnalysis = document.querySelector('.trade-analysis-container');
+    if (!tradeAnalysis) {
+        tradeAnalysis = document.createElement('div');
+        tradeAnalysis.className = 'trade-analysis-container';
+        tradeAnalysis.innerHTML = `
+            <h3>Trade Analysis</h3>
+            <div class="trade-players">
+                <div class="giving-players">
+                    <h4>Giving</h4>
+                    <div class="players-list" id="givingList"></div>
+                </div>
+                <div class="receiving-players">
+                    <h4>Receiving</h4>
+                    <div class="players-list" id="receivingList"></div>
+                </div>
+            </div>
+            <div class="trade-summary">
+                <div class="summary-stats">
+                    <div class="stat">
+                        <span class="label">Trade Value:</span>
+                        <span class="value" id="tradeValue">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Fairness:</span>
+                        <span class="value" id="fairness">-</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        // Add styles for trade analysis
+        const style = document.createElement('style');
+        style.textContent = `
+            .trade-analysis-container {
+                background: rgba(26, 26, 46, 0.8);
+                border-radius: 15px;
+                padding: 25px;
+                margin-top: 30px;
+                border: 1px solid rgba(74, 158, 255, 0.2);
+            }
+            .trade-analysis-container h3 {
+                color: #4a9eff;
+                margin-bottom: 20px;
+                text-align: center;
+            }
+            .trade-players {
+                display: grid;
+                grid-template-columns: 1fr 1fr;
+                gap: 20px;
+                margin-bottom: 20px;
+            }
+            .giving-players h4,
+            .receiving-players h4 {
+                color: #6bb6ff;
+                margin-bottom: 15px;
+                text-align: center;
+            }
+            .players-list {
+                min-height: 100px;
+                border: 1px solid rgba(74, 158, 255, 0.2);
+                border-radius: 8px;
+                padding: 10px;
+                background: rgba(26, 26, 46, 0.5);
+            }
+            .trade-summary {
+                border-top: 1px solid rgba(74, 158, 255, 0.2);
+                padding-top: 20px;
+            }
+            .summary-stats {
+                display: flex;
+                justify-content: space-around;
+            }
+            .stat {
+                text-align: center;
+            }
+            .stat .label {
+                display: block;
+                color: #b0b0b0;
+                font-size: 0.9rem;
+                margin-bottom: 5px;
+            }
+            .stat .value {
+                display: block;
+                color: #4a9eff;
+                font-size: 1.2rem;
+                font-weight: 600;
+            }
+        `;
+        document.head.appendChild(style);
+        
+        // Insert before the analyze button
+        const tradeAnalyzer = document.querySelector('.trade-analyzer');
+        tradeAnalyzer.insertBefore(tradeAnalysis, tradeAnalyzer.querySelector('.trade-analysis'));
+    }
+    
+    // Determine which list to add to based on the original list
+    const isMyTeam = listItem.closest('#myTeamList') !== null;
+    const targetList = isMyTeam ? 'givingList' : 'receivingList';
+    
+    const playerElement = document.createElement('div');
+    playerElement.className = 'trade-player-item';
+    playerElement.innerHTML = `
+        <div class="player-info">
+            <strong>${name}</strong>
+            <span>${position}</span>
+        </div>
+        <div class="player-rating">${rating}</div>
+        <button class="remove-btn">×</button>
+    `;
+    
+    // Add styles for trade player items
+    const itemStyle = document.createElement('style');
+    itemStyle.textContent = `
+        .trade-player-item {
+            display: flex;
+            align-items: center;
+            justify-content: space-between;
+            padding: 8px 12px;
+            background: rgba(74, 158, 255, 0.1);
+            border-radius: 6px;
+            margin-bottom: 8px;
+            border: 1px solid rgba(74, 158, 255, 0.2);
+        }
+        .trade-player-item .player-info {
+            flex: 1;
+        }
+        .trade-player-item .player-info strong {
+            color: #ffffff;
+            display: block;
+            font-size: 0.9rem;
+        }
+        .trade-player-item .player-info span {
+            color: #b0b0b0;
+            font-size: 0.8rem;
+        }
+        .trade-player-item .player-rating {
+            background: #4a9eff;
+            color: #1a1a2e;
+            padding: 2px 8px;
+            border-radius: 10px;
+            font-size: 0.8rem;
+            font-weight: 600;
+            margin: 0 10px;
+        }
+        .remove-btn {
+            background: #ff4757;
+            color: white;
+            border: none;
+            width: 20px;
+            height: 20px;
+            border-radius: 50%;
+            cursor: pointer;
+            font-size: 12px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+        .remove-btn:hover {
+            background: #ff3742;
+        }
+    `;
+    document.head.appendChild(itemStyle);
+    
+    document.getElementById(targetList).appendChild(playerElement);
+    
+    // Add remove functionality
+    playerElement.querySelector('.remove-btn').addEventListener('click', function() {
+        playerElement.remove();
+        updateTradeAnalysis();
+    });
+    
+    updateTradeAnalysis();
+}
+
+function updateTradeAnalysis() {
+    const givingList = document.getElementById('givingList');
+    const receivingList = document.getElementById('receivingList');
+    
+    if (!givingList || !receivingList) return;
+    
+    const givingPlayers = givingList.querySelectorAll('.trade-player-item');
+    const receivingPlayers = receivingList.querySelectorAll('.trade-player-item');
+    
+    // Calculate trade value (simplified)
+    let givingValue = 0;
+    let receivingValue = 0;
+    
+    givingPlayers.forEach(player => {
+        const rating = parseFloat(player.querySelector('.player-rating').textContent);
+        givingValue += rating;
+    });
+    
+    receivingPlayers.forEach(player => {
+        const rating = parseFloat(player.querySelector('.player-rating').textContent);
+        receivingValue += rating;
+    });
+    
+    const tradeValue = receivingValue - givingValue;
+    const fairness = Math.abs(tradeValue) < 5 ? 'Fair' : tradeValue > 0 ? 'Favorable' : 'Unfavorable';
+    
+    document.getElementById('tradeValue').textContent = tradeValue.toFixed(1);
+    document.getElementById('fairness').textContent = fairness;
+    
+    // Update fairness color
+    const fairnessElement = document.getElementById('fairness');
+    fairnessElement.style.color = fairness === 'Fair' ? '#00d4aa' : 
+                                 fairness === 'Favorable' ? '#4a9eff' : '#ff4757';
+}
+
+function analyzeTrade() {
+    const givingList = document.getElementById('givingList');
+    const receivingList = document.getElementById('receivingList');
+    
+    if (!givingList || !receivingList) {
+        showNotification('Please add players to both sides of the trade', 'warning');
+        return;
+    }
+    
+    const givingPlayers = givingList.querySelectorAll('.trade-player-item');
+    const receivingPlayers = receivingList.querySelectorAll('.trade-player-item');
+    
+    if (givingPlayers.length === 0 || receivingPlayers.length === 0) {
+        showNotification('Please add players to both sides of the trade', 'warning');
+        return;
+    }
+    
+    // Perform detailed trade analysis
+    const analysis = performTradeAnalysis(givingPlayers, receivingPlayers);
+    
+    showTradeAnalysisModal(analysis);
+}
+
+function performTradeAnalysis(givingPlayers, receivingPlayers) {
+    // Simplified analysis - in a real app, this would use advanced algorithms
+    let givingValue = 0;
+    let receivingValue = 0;
+    let givingCount = givingPlayers.length;
+    let receivingCount = receivingPlayers.length;
+    
+    givingPlayers.forEach(player => {
+        const rating = parseFloat(player.querySelector('.player-rating').textContent);
+        givingValue += rating;
+    });
+    
+    receivingPlayers.forEach(player => {
+        const rating = parseFloat(player.querySelector('.player-rating').textContent);
+        receivingValue += rating;
+    });
+    
+    const netValue = receivingValue - givingValue;
+    const avgGiving = givingValue / givingCount;
+    const avgReceiving = receivingValue / receivingCount;
+    
+    return {
+        netValue: netValue.toFixed(1),
+        avgGiving: avgGiving.toFixed(1),
+        avgReceiving: avgReceiving.toFixed(1),
+        fairness: Math.abs(netValue) < 5 ? 'Fair' : netValue > 0 ? 'Favorable' : 'Unfavorable',
+        recommendation: getTradeRecommendation(netValue)
+    };
+}
+
+function getTradeRecommendation(netValue) {
+    if (Math.abs(netValue) < 5) {
+        return 'This is a fair trade. Both sides get similar value.';
+    } else if (netValue > 10) {
+        return 'This trade heavily favors you. Consider accepting!';
+    } else if (netValue > 0) {
+        return 'This trade slightly favors you. Good value.';
+    } else if (netValue > -10) {
+        return 'This trade slightly favors your opponent. Consider negotiating.';
+    } else {
+        return 'This trade heavily favors your opponent. Not recommended.';
+    }
+}
+
+function showTradeAnalysisModal(analysis) {
+    const modal = document.createElement('div');
+    modal.className = 'analysis-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h3>Trade Analysis Results</h3>
+            <div class="analysis-results">
+                <div class="result-item">
+                    <span class="label">Net Value:</span>
+                    <span class="value ${analysis.netValue > 0 ? 'positive' : 'negative'}">${analysis.netValue > 0 ? '+' : ''}${analysis.netValue}</span>
+                </div>
+                <div class="result-item">
+                    <span class="label">Your Average:</span>
+                    <span class="value">${analysis.avgGiving}</span>
+                </div>
+                <div class="result-item">
+                    <span class="label">Their Average:</span>
+                    <span class="value">${analysis.avgReceiving}</span>
+                </div>
+                <div class="result-item">
+                    <span class="label">Fairness:</span>
+                    <span class="value ${analysis.fairness.toLowerCase()}">${analysis.fairness}</span>
+                </div>
+            </div>
+            <div class="recommendation">
+                <h4>Recommendation:</h4>
+                <p>${analysis.recommendation}</p>
+            </div>
+            <button class="close-modal">Close</button>
+        </div>
+    `;
+    
+    // Add modal styles
+    const style = document.createElement('style');
+    style.textContent = `
+        .analysis-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+        }
+        .analysis-modal .modal-content {
+            background: #1a1a2e;
+            padding: 30px;
+            border-radius: 15px;
+            border: 2px solid #4a9eff;
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+        }
+        .analysis-modal h3 {
+            color: #4a9eff;
+            margin-bottom: 20px;
+        }
+        .analysis-results {
+            display: grid;
+            gap: 15px;
+            margin-bottom: 20px;
+        }
+        .result-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 15px;
+            background: rgba(74, 158, 255, 0.1);
+            border-radius: 8px;
+        }
+        .result-item .label {
+            color: #b0b0b0;
+            font-weight: 500;
+        }
+        .result-item .value {
+            font-weight: 600;
+            font-size: 1.1rem;
+        }
+        .result-item .value.positive {
+            color: #00d4aa;
+        }
+        .result-item .value.negative {
+            color: #ff4757;
+        }
+        .result-item .value.fair {
+            color: #4a9eff;
+        }
+        .result-item .value.favorable {
+            color: #00d4aa;
+        }
+        .result-item .value.unfavorable {
+            color: #ff4757;
+        }
+        .recommendation {
+            background: rgba(74, 158, 255, 0.1);
+            padding: 15px;
+            border-radius: 8px;
+            margin-bottom: 20px;
+        }
+        .recommendation h4 {
+            color: #4a9eff;
+            margin-bottom: 10px;
+        }
+        .recommendation p {
+            color: #b0b0b0;
+            line-height: 1.5;
+        }
+        .close-modal {
+            background: #4a9eff;
+            color: #1a1a2e;
+            border: none;
+            padding: 12px 25px;
+            border-radius: 8px;
+            cursor: pointer;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        .close-modal:hover {
+            background: #6bb6ff;
+        }
+    `;
+    
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    
+    // Close modal functionality
+    modal.querySelector('.close-modal').addEventListener('click', () => {
+        document.body.removeChild(modal);
+        document.head.removeChild(style);
+    });
+    
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        }
+    });
+}
+
+// Player Interactions
+function setupPlayerInteractions() {
+    const playerCards = document.querySelectorAll('.player-card');
+    
+    playerCards.forEach(card => {
+        card.addEventListener('click', function() {
+            // Add selection effect
+            playerCards.forEach(c => c.classList.remove('selected'));
+            this.classList.add('selected');
+            
+            // Show player details (placeholder for now)
+            const playerName = this.querySelector('h5').textContent;
+            showPlayerDetails(playerName);
+        });
+    });
+}
+
+function showPlayerDetails(playerName) {
+    // Placeholder for player details modal
+    showNotification(`Viewing details for ${playerName}`, 'info');
+}
+
+// Utility Functions
+function showNotification(message, type = 'info') {
+    const notification = document.createElement('div');
+    notification.className = `notification ${type}`;
+    notification.textContent = message;
+    
+    // Add notification styles
+    const style = document.createElement('style');
+    style.textContent = `
+        .notification {
+            position: fixed;
+            top: 20px;
+            right: 20px;
+            padding: 15px 20px;
+            border-radius: 8px;
+            color: white;
+            font-weight: 500;
+            z-index: 1001;
+            animation: slideIn 0.3s ease;
+        }
+        .notification.success {
+            background: #00d4aa;
+        }
+        .notification.warning {
+            background: #ffa502;
+        }
+        .notification.info {
+            background: #4a9eff;
+        }
+        @keyframes slideIn {
+            from { transform: translateX(100%); opacity: 0; }
+            to { transform: translateX(0); opacity: 1; }
+        }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(notification);
+    
+    // Remove notification after 3 seconds
+    setTimeout(() => {
+        notification.style.animation = 'slideIn 0.3s ease reverse';
+        setTimeout(() => {
+            if (document.body.contains(notification)) {
+                document.body.removeChild(notification);
+            }
+            if (document.head.contains(style)) {
+                document.head.removeChild(style);
+            }
+        }, 300);
+    }, 3000);
+}
+
+// Add fadeIn animation
+const fadeInStyle = document.createElement('style');
+fadeInStyle.textContent = `
+    @keyframes fadeIn {
+        from { opacity: 0; transform: translateY(10px); }
+        to { opacity: 1; transform: translateY(0); }
+    }
+`;
+document.head.appendChild(fadeInStyle);
