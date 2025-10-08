@@ -1,4 +1,8 @@
 // Fantasy Football Team & Trade Analyzer JavaScript
+// Main application logic and UI interactions
+
+// Initialize API Controller (loaded from external file)
+const apiController = new FantasyAPIController();
 
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize the application
@@ -35,8 +39,13 @@ function setupLeagueSettings() {
             // Add active class to clicked button
             this.classList.add('active');
             
-            // Show connection modal or API integration
-            showProviderConnection(this.textContent.trim());
+            // Check if it's the Sleeper button
+            if (this.classList.contains('sleeper')) {
+                showSleeperUsernamePopup();
+            } else {
+                // Show connection modal or API integration for other providers
+                showProviderConnection(this.textContent.trim());
+            }
         });
     });
     
@@ -47,6 +56,216 @@ function setupLeagueSettings() {
     
     [scoringFormat, leagueType, superflex].forEach(element => {
         element.addEventListener('change', updateLeagueSettings);
+    });
+}
+
+function showSleeperUsernamePopup() {
+    // Create a modal for Sleeper username input
+    const modal = document.createElement('div');
+    modal.className = 'sleeper-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-bed"></i> Connect to Sleeper</h3>
+                <p>Enter your Sleeper username to import your league data</p>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label for="sleeperUsername">Sleeper Username</label>
+                    <input type="text" id="sleeperUsername" placeholder="Enter your Sleeper username" autocomplete="username">
+                    <div class="input-help">
+                        <i class="fas fa-info-circle"></i>
+                        <span>This is the username you use to log into Sleeper</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel">Cancel</button>
+                <button class="btn-connect" id="connectSleeper">
+                    <i class="fas fa-link"></i>
+                    Connect
+                </button>
+            </div>
+        </div>
+    `;
+    
+    // Add modal styles
+    const style = document.createElement('style');
+    style.textContent = `
+        .sleeper-modal {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: rgba(0, 0, 0, 0.8);
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1000;
+            backdrop-filter: blur(5px);
+        }
+        .sleeper-modal .modal-content {
+            background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
+            padding: 0;
+            border-radius: 20px;
+            border: 2px solid #00d4aa;
+            max-width: 450px;
+            width: 90%;
+            box-shadow: 0 20px 40px rgba(0, 0, 0, 0.5);
+            overflow: hidden;
+        }
+        .modal-header {
+            padding: 30px 30px 20px;
+            text-align: center;
+            border-bottom: 1px solid rgba(0, 212, 170, 0.2);
+        }
+        .modal-header h3 {
+            color: #00d4aa;
+            margin-bottom: 10px;
+            font-size: 1.5rem;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+        }
+        .modal-header p {
+            color: #b0b0b0;
+            font-size: 1rem;
+            line-height: 1.5;
+        }
+        .modal-body {
+            padding: 30px;
+        }
+        .input-group {
+            display: flex;
+            flex-direction: column;
+            gap: 15px;
+        }
+        .input-group label {
+            color: #00d4aa;
+            font-weight: 600;
+            font-size: 1rem;
+        }
+        .input-group input {
+            background: #0f0f1a;
+            border: 2px solid #00d4aa;
+            color: white;
+            padding: 15px 20px;
+            border-radius: 10px;
+            font-size: 1rem;
+            transition: all 0.3s ease;
+        }
+        .input-group input:focus {
+            outline: none;
+            border-color: #4a9eff;
+            box-shadow: 0 0 15px rgba(0, 212, 170, 0.3);
+        }
+        .input-help {
+            display: flex;
+            align-items: center;
+            gap: 8px;
+            color: #b0b0b0;
+            font-size: 0.9rem;
+        }
+        .input-help i {
+            color: #4a9eff;
+        }
+        .modal-footer {
+            padding: 20px 30px 30px;
+            display: flex;
+            gap: 15px;
+            justify-content: flex-end;
+        }
+        .btn-cancel, .btn-connect {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 8px;
+            font-weight: 600;
+            cursor: pointer;
+            transition: all 0.3s ease;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+        .btn-cancel {
+            background: #2a2a4a;
+            color: #b0b0b0;
+            border: 1px solid #4a4a6a;
+        }
+        .btn-cancel:hover {
+            background: #3a3a5a;
+            color: white;
+        }
+        .btn-connect {
+            background: linear-gradient(135deg, #00d4aa 0%, #4a9eff 100%);
+            color: #1a1a2e;
+        }
+        .btn-connect:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 5px 15px rgba(0, 212, 170, 0.3);
+        }
+        .btn-connect:disabled {
+            opacity: 0.6;
+            cursor: not-allowed;
+            transform: none;
+        }
+    `;
+    
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    
+    // Focus on input
+    const usernameInput = modal.querySelector('#sleeperUsername');
+    usernameInput.focus();
+    
+    // Connect button functionality
+    const connectBtn = modal.querySelector('#connectSleeper');
+    const cancelBtn = modal.querySelector('.btn-cancel');
+    
+    connectBtn.addEventListener('click', async () => {
+        const username = usernameInput.value.trim();
+        
+        if (!username) {
+            showNotification('Please enter your Sleeper username', 'warning');
+            return;
+        }
+        
+        // Disable button and show loading
+        connectBtn.disabled = true;
+        connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Connecting...';
+        
+        try {
+            await apiController.connectSleeperAccount(username);
+            // Close modal on success
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        } catch (error) {
+            // Re-enable button on error
+            connectBtn.disabled = false;
+            connectBtn.innerHTML = '<i class="fas fa-link"></i> Connect';
+        }
+    });
+    
+    // Cancel button functionality
+    cancelBtn.addEventListener('click', () => {
+        document.body.removeChild(modal);
+        document.head.removeChild(style);
+    });
+    
+    // Close on outside click
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        }
+    });
+    
+    // Enter key to connect
+    usernameInput.addEventListener('keypress', (e) => {
+        if (e.key === 'Enter') {
+            connectBtn.click();
+        }
     });
 }
 
