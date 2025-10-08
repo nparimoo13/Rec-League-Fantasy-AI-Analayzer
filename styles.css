@@ -497,6 +497,23 @@ input:checked + .slider:before {
     transition: all 0.3s ease;
     cursor: pointer;
 }
+.player-card .remove-inline {
+    margin-left: auto;
+    background: #ff4757;
+    color: #fff;
+    border: none;
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    cursor: pointer;
+    font-size: 14px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+
+.player-card .remove-inline:hover { background: #ff3742; }
+
 
 .player-card:hover {
     border-color: #4a9eff;
@@ -535,6 +552,21 @@ input:checked + .slider:before {
     font-size: 2rem;
     color: #4a9eff;
     font-weight: bold;
+}
+
+/* Ensure Add Player placeholders in Trade Analyzer match lineup visuals */
+.trade-analyzer .add-trade-card {
+    max-width: 420px;
+    margin-top: 6px;
+}
+.trade-analyzer .add-trade-card .player-image {
+    width: 60px;
+    height: 60px;
+    border-radius: 50%;
+    border: 2px dashed rgba(74, 158, 255, 0.5);
+}
+.trade-analyzer .add-trade-card:hover .placeholder-icon {
+    color: #6bb6ff;
 }
 
 .player-card.placeholder .player-info h5 {

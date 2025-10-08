@@ -584,7 +584,7 @@ class FantasyAPIController {
 
         // Add existing players
         players.slice(0, config.count).forEach(player => {
-            const playerCard = this.createPlayerCard(player);
+            const playerCard = this.createPlayerCard(player, position, false);
             positionGroup.appendChild(playerCard);
         });
 
@@ -601,6 +601,10 @@ class FantasyAPIController {
     getPlayerImageCandidates(player) {
         const playerId = player.player_id || player.playerId || player.player?.player_id || player.id;
         const candidates = [];
+        // If an explicit image URL was provided (e.g., from ESPN), try it first
+        if (player.image) {
+            candidates.push(player.image);
+        }
         if (playerId) {
             // Common Sleeper headshot locations
             candidates.push(
@@ -632,9 +636,11 @@ class FantasyAPIController {
         return img;
     }
 
-    createPlayerCard(player) {
+    createPlayerCard(player, slotPosition = null, isBench = false) {
         const playerCard = document.createElement('div');
         playerCard.className = 'player-card';
+        if (isBench) playerCard.classList.add('bench');
+        playerCard.setAttribute('data-slot-position', slotPosition || '');
         
         const playerImage = document.createElement('div');
         playerImage.className = 'player-image';
@@ -649,8 +655,25 @@ class FantasyAPIController {
             <div class="rating">${this.calculatePlayerRating(player)}</div>
         `;
         
+        const removeBtn = document.createElement('button');
+        removeBtn.className = 'remove-inline';
+        removeBtn.setAttribute('title', 'Remove');
+        removeBtn.textContent = '×';
+        removeBtn.addEventListener('click', (e) => {
+            e.stopPropagation();
+            const parent = playerCard.parentElement;
+            const slotPos = playerCard.getAttribute('data-slot-position');
+            playerCard.remove();
+            // If lineup slot (not bench) then restore placeholder
+            if (!isBench && slotPos) {
+                const placeholder = this.createPlayerPlaceholder(slotPos);
+                parent.appendChild(placeholder);
+            }
+        });
+
         playerCard.appendChild(playerImage);
         playerCard.appendChild(playerInfo);
+        playerCard.appendChild(removeBtn);
         
         return playerCard;
     }
@@ -670,12 +693,38 @@ class FantasyAPIController {
             </div>
         `;
         
-        // Add click handler for adding players
+        // Add click handler for adding players via global modal tied to lineup
         placeholder.addEventListener('click', () => {
-            this.showAddPlayerModal(position);
+            if (typeof showGlobalAddPlayerModal === 'function') {
+                showGlobalAddPlayerModal({ mode: 'lineup', position });
+            }
         });
         
         return placeholder;
+    }
+
+    addPlayerToLineup(position, playerData) {
+        // Find the first placeholder in the requested position group and replace it
+        const groups = document.querySelectorAll('.lineup-section .position-group');
+        for (let i = 0; i < groups.length; i++) {
+            const header = groups[i].querySelector('h4');
+            if (!header) continue;
+            if (header.textContent.trim().toUpperCase() !== String(position).toUpperCase()) continue;
+            const placeholder = groups[i].querySelector('.player-card.placeholder');
+            if (placeholder) {
+                const card = this.createPlayerCard({
+                    full_name: playerData.full_name,
+                    position: playerData.position,
+                    team: playerData.team,
+                    id: playerData.id,
+                    player_id: playerData.player_id,
+                    image: playerData.image
+                }, position, false);
+                groups[i].replaceChild(card, placeholder);
+                return true;
+            }
+        }
+        return false;
     }
 
     createBenchSection(rosterPlayers) {
@@ -689,8 +738,7 @@ class FantasyAPIController {
             benchContainer.className = 'bench-players';
             
             benchPlayers.forEach(player => {
-                const playerCard = this.createPlayerCard(player);
-                playerCard.classList.add('bench');
+                const playerCard = this.createPlayerCard(player, null, true);
                 benchContainer.appendChild(playerCard);
             });
             

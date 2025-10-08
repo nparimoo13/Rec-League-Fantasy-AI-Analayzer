@@ -369,24 +369,17 @@ function updateLeagueSettings() {
 
 // Trade Analyzer Functionality
 function setupTradeAnalyzer() {
-    const myTeamSearch = document.getElementById('myTeamSearch');
-    const opponentSearch = document.getElementById('opponentSearch');
     const analyzeBtn = document.querySelector('.analyze-btn');
-    
-    // Search functionality for both lists
-    myTeamSearch.addEventListener('input', function() {
-        filterPlayerList('myTeamList', this.value);
+    if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeTrade);
+
+    // Wire up Add Player buttons for trade analyzer
+    const addButtons = document.querySelectorAll('.add-trade-player-btn');
+    addButtons.forEach(btn => {
+        btn.addEventListener('click', () => {
+            const side = btn.getAttribute('data-side') || 'giving';
+            showGlobalAddPlayerModal({ mode: 'trade', side });
+        });
     });
-    
-    opponentSearch.addEventListener('input', function() {
-        filterPlayerList('opponentList', this.value);
-    });
-    
-    // Analyze trade button
-    analyzeBtn.addEventListener('click', analyzeTrade);
-    
-    // Add player functionality
-    setupAddPlayerButtons();
 }
 
 function filterPlayerList(listId, searchTerm) {
@@ -404,6 +397,308 @@ function filterPlayerList(listId, searchTerm) {
             item.style.display = 'none';
         }
     });
+}
+
+// Trade Analyzer: Add Player Modal with Autocomplete
+// Unified Add Player modal for both Trade and Lineup additions
+function showGlobalAddPlayerModal(options) {
+    const mode = options?.mode || 'trade'; // 'trade' | 'lineup'
+    const side = options?.side || 'giving';
+    const lineupPosition = options?.position || '';
+
+    const modal = document.createElement('div');
+    modal.className = 'add-trade-player-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-user-plus"></i> Add Player ${mode === 'trade' ? `(${side === 'giving' ? 'My Team' : 'Opponent'})` : (lineupPosition ? `(${lineupPosition})` : '')}</h3>
+                <p>Search and select a player to add</p>
+            </div>
+            <div class="modal-body">
+                <div class="search-row">
+                    <input type="text" id="tradePlayerSearch" placeholder="Type a player name..." autocomplete="off" />
+                </div>
+                <div class="results-list" id="tradePlayerResults"></div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-add" id="btnAddTradePlayer" disabled><i class="fas fa-plus"></i> Add Player</button>
+                <button class="btn-cancel">Cancel</button>
+            </div>
+        </div>
+    `;
+
+    const style = document.createElement('style');
+    style.textContent = `
+        .add-trade-player-modal { position: fixed; inset: 0; background: rgba(0,0,0,0.8); display: flex; align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }
+        .add-trade-player-modal .modal-content { background: #1a1a2e; border: 2px solid #4a9eff; border-radius: 16px; width: 90%; max-width: 560px; overflow: hidden; }
+        .add-trade-player-modal .modal-header { padding: 20px 24px; border-bottom: 1px solid rgba(74,158,255,0.2); text-align: center; }
+        .add-trade-player-modal .modal-header h3 { color: #4a9eff; margin-bottom: 6px; }
+        .add-trade-player-modal .modal-header p { color: #b0b0b0; font-size: 0.95rem; }
+        .add-trade-player-modal .modal-body { padding: 16px; }
+        .add-trade-player-modal .search-row { margin-bottom: 12px; }
+        .add-trade-player-modal input#tradePlayerSearch { width: 100%; background: #0f0f1a; border: 2px solid #4a9eff; color: #fff; padding: 12px 14px; border-radius: 10px; font-size: 1rem; }
+        .add-trade-player-modal input#tradePlayerSearch:focus { outline: none; box-shadow: 0 0 10px rgba(74,158,255,0.35); }
+        .add-trade-player-modal .results-list { max-height: 360px; overflow-y: auto; display: grid; gap: 8px; }
+        .add-trade-player-modal .result-item { display: flex; align-items: center; gap: 12px; padding: 10px; background: rgba(74,158,255,0.08); border: 1px solid rgba(74,158,255,0.2); border-radius: 10px; cursor: pointer; transition: transform 0.15s ease, background 0.15s ease; }
+        .add-trade-player-modal .result-item:hover { background: rgba(74,158,255,0.16); transform: translateY(-1px); }
+        .add-trade-player-modal .result-item .avatar { width: 36px; height: 36px; border-radius: 50%; overflow: hidden; border: 2px solid #4a9eff; flex-shrink: 0; }
+        .add-trade-player-modal .result-item .meta { display: flex; flex-direction: column; }
+        .add-trade-player-modal .result-item .meta .name { color: #fff; font-weight: 600; font-size: 0.95rem; }
+        .add-trade-player-modal .result-item .meta .sub { color: #b0b0b0; font-size: 0.85rem; }
+        .add-trade-player-modal .modal-footer { padding: 12px 16px 16px; display: flex; justify-content: flex-end; gap: 10px; }
+        .add-trade-player-modal .btn-cancel { background: #2a2a4a; color: #b0b0b0; border: 1px solid #4a4a6a; padding: 10px 18px; border-radius: 8px; cursor: pointer; }
+        .add-trade-player-modal .btn-cancel:hover { background: #3a3a5a; color: #fff; }
+        .add-trade-player-modal .btn-add { background: #00d4aa; color: #0f0f1a; border: none; padding: 10px 18px; border-radius: 8px; cursor: pointer; font-weight: 600; }
+        .add-trade-player-modal .btn-add:disabled { opacity: 0.6; cursor: not-allowed; }
+    `;
+
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+
+    const input = modal.querySelector('#tradePlayerSearch');
+    const results = modal.querySelector('#tradePlayerResults');
+    const cancelBtn = modal.querySelector('.btn-cancel');
+    const addBtn = modal.querySelector('#btnAddTradePlayer');
+
+    const closeModal = () => {
+        if (document.body.contains(modal)) document.body.removeChild(modal);
+        if (document.head.contains(style)) document.head.removeChild(style);
+    };
+
+    cancelBtn.addEventListener('click', closeModal);
+    modal.addEventListener('click', (e) => { if (e.target === modal) closeModal(); });
+
+    let searchTimeout;
+    let selectedIndex = -1;
+    let currentResults = [];
+    input.addEventListener('input', async function() {
+        clearTimeout(searchTimeout);
+        const query = this.value.trim();
+        if (!query) { results.innerHTML = ''; return; }
+        searchTimeout = setTimeout(async () => {
+            const matches = await universalPlayerSearch(query);
+            currentResults = matches;
+            selectedIndex = matches.length ? 0 : -1;
+            renderTradeSearchResults(matches, side, results, closeModal, () => selectedIndex);
+            updateAddButtonState();
+        }, 180);
+    });
+    input.focus();
+
+    input.addEventListener('keydown', (e) => {
+        const max = currentResults.length - 1;
+        if (e.key === 'ArrowDown' && max >= 0) {
+            e.preventDefault();
+            selectedIndex = Math.min(max, selectedIndex + 1);
+            highlightSelected(results, selectedIndex);
+            updateAddButtonState();
+        } else if (e.key === 'ArrowUp' && max >= 0) {
+            e.preventDefault();
+            selectedIndex = Math.max(0, selectedIndex - 1);
+            highlightSelected(results, selectedIndex);
+            updateAddButtonState();
+        } else if (e.key === 'Enter' && selectedIndex >= 0) {
+            e.preventDefault();
+            addSelected();
+        }
+    });
+
+    addBtn.addEventListener('click', addSelected);
+
+    function updateAddButtonState() {
+        addBtn.disabled = !(selectedIndex >= 0 && currentResults[selectedIndex]);
+    }
+
+    function addSelected() {
+        if (!(selectedIndex >= 0 && currentResults[selectedIndex])) return;
+        const m = currentResults[selectedIndex];
+        const rating = (Math.random() * 15 + 80).toFixed(1);
+        if (mode === 'trade') {
+            addTradePlayer(side, { name: m.full_name, position: m.position, rating });
+        } else {
+            if (window.apiController && typeof apiController.addPlayerToLineup === 'function') {
+                apiController.addPlayerToLineup(lineupPosition || (m.position || 'FLEX'), {
+                    full_name: m.full_name,
+                    position: m.position || lineupPosition || 'FLEX',
+                    team: m.team || '',
+                    id: m.id,
+                    image: getEspnHeadshotUrl(m.id)
+                });
+            }
+        }
+        closeModal();
+    }
+}
+
+// ESPN NFL players dataset (cached once)
+let _espnPlayersCache = null;
+async function loadEspnPlayers() {
+    if (_espnPlayersCache) return _espnPlayersCache;
+    const url = 'https://sports.core.api.espn.com/v3/sports/football/nfl/athletes?limit=20000&active=true';
+    const res = await fetch(url, { method: 'GET' });
+    if (!res.ok) throw new Error(`ESPN players fetch failed: ${res.status}`);
+    const data = await res.json();
+    const items = Array.isArray(data.items) ? data.items : [];
+    _espnPlayersCache = items.map(it => ({
+        id: it.id,
+        full_name: it.fullName || it.displayName || it.shortName || '',
+        position: (it.position && (it.position.abbreviation || it.position.name)) || '',
+        team: (it.team && (it.team.abbreviation || it.team.name)) || ''
+    })).filter(p => p.full_name);
+    return _espnPlayersCache;
+}
+
+async function universalPlayerSearch(query) {
+    const q = (query || '').toLowerCase();
+    if (!q) return [];
+    try {
+        const list = await loadEspnPlayers();
+        const out = [];
+        for (let i = 0; i < list.length; i++) {
+            const p = list[i];
+            if (p.full_name.toLowerCase().includes(q)) {
+                out.push(p);
+                if (out.length >= 30) break;
+            }
+        }
+        return out;
+    } catch (e) {
+        console.error('universalPlayerSearch error:', e);
+        return [];
+    }
+}
+
+function getEspnHeadshotUrl(id) {
+    // ESPN headshot CDN pattern via s3/img handles; use a proxy-less simple path when available
+    // Fallback to Sleeper static if not available
+    const espn = `https://a.espncdn.com/i/headshots/nfl/players/full/${id}.png`;
+    return espn;
+}
+
+function renderTradeSearchResults(matches, side, resultsEl, closeModal, getSelectedIndex) {
+    if (!Array.isArray(matches)) { resultsEl.innerHTML = ''; return; }
+    resultsEl.innerHTML = matches.map(m => {
+        const avatar = getEspnHeadshotUrl(m.id);
+        return `
+            <div class="result-item" data-id="${m.id}" data-name="${m.full_name}" data-pos="${m.position || ''}" data-team="${m.team || ''}">
+                <div class="avatar"><img src="${avatar}" alt="${m.full_name}" onerror="this.onerror=null;this.src='https://via.placeholder.com/36x36/1a1a2e/ffffff?text=${(m.position||'').slice(0,2)}';"/></div>
+                <div class="meta">
+                    <span class="name">${m.full_name}</span>
+                    <span class="sub">${m.position || '-'} ${m.team ? ('- ' + m.team) : ''}</span>
+                </div>
+            </div>
+        `;
+    }).join('');
+
+    const items = resultsEl.querySelectorAll('.result-item');
+    const applyHighlight = () => {
+        const sel = (getSelectedIndex && getSelectedIndex()) || -1;
+        items.forEach((it, idx) => {
+            if (idx === sel) it.classList.add('selected');
+            else it.classList.remove('selected');
+        });
+    };
+    applyHighlight();
+
+    items.forEach((item, idx) => {
+        item.addEventListener('click', () => {
+            const name = item.getAttribute('data-name');
+            const position = item.getAttribute('data-pos');
+            // Simple placeholder rating; could be replaced with real metric
+            const rating = (Math.random() * 15 + 80).toFixed(1);
+            addTradePlayer(side, { name, position, rating });
+            closeModal();
+        });
+        item.addEventListener('mouseenter', () => {
+            items.forEach(it => it.classList.remove('selected'));
+            item.classList.add('selected');
+        });
+    });
+}
+
+function ensureTradeAnalysisContainer() {
+    let tradeAnalysis = document.querySelector('.trade-analysis-container');
+    if (!tradeAnalysis) {
+        tradeAnalysis = document.createElement('div');
+        tradeAnalysis.className = 'trade-analysis-container';
+        tradeAnalysis.innerHTML = `
+            <h3>Trade Analysis</h3>
+            <div class="trade-players">
+                <div class="giving-players">
+                    <h4>Giving</h4>
+                    <div class="players-list" id="givingList"></div>
+                </div>
+                <div class="receiving-players">
+                    <h4>Receiving</h4>
+                    <div class="players-list" id="receivingList"></div>
+                </div>
+            </div>
+            <div class="trade-summary">
+                <div class="summary-stats">
+                    <div class="stat">
+                        <span class="label">Trade Value:</span>
+                        <span class="value" id="tradeValue">0</span>
+                    </div>
+                    <div class="stat">
+                        <span class="label">Fairness:</span>
+                        <span class="value" id="fairness">-</span>
+                    </div>
+                </div>
+            </div>
+        `;
+        const style = document.createElement('style');
+        style.textContent = `
+            .trade-analysis-container { background: rgba(26,26,46,0.8); border-radius: 15px; padding: 25px; margin-top: 30px; border: 1px solid rgba(74,158,255,0.2); }
+            .trade-analysis-container h3 { color: #4a9eff; margin-bottom: 20px; text-align: center; }
+            .trade-players { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+            .giving-players h4, .receiving-players h4 { color: #6bb6ff; margin-bottom: 15px; text-align: center; }
+            .players-list { min-height: 100px; border: 1px solid rgba(74,158,255,0.2); border-radius: 8px; padding: 10px; background: rgba(26,26,46,0.5); }
+            .trade-summary { border-top: 1px solid rgba(74,158,255,0.2); padding-top: 20px; }
+            .summary-stats { display: flex; justify-content: space-around; }
+            .stat { text-align: center; }
+            .stat .label { display: block; color: #b0b0b0; font-size: 0.9rem; margin-bottom: 5px; }
+            .stat .value { display: block; color: #4a9eff; font-size: 1.2rem; font-weight: 600; }
+        `;
+        document.head.appendChild(style);
+        const tradeAnalyzer = document.querySelector('.trade-analyzer');
+        tradeAnalyzer.insertBefore(tradeAnalysis, tradeAnalyzer.querySelector('.trade-analysis'));
+    }
+}
+
+function addTradePlayer(side, data) {
+    ensureTradeAnalysisContainer();
+    const targetListId = side === 'receiving' ? 'receivingList' : 'givingList';
+    const target = document.getElementById(targetListId);
+    if (!target) return;
+
+    const el = document.createElement('div');
+    el.className = 'trade-player-item';
+    el.innerHTML = `
+        <div class="player-info">
+            <strong>${data.name}</strong>
+            <span>${data.position || '-'}</span>
+        </div>
+        <div class="player-rating">${data.rating}</div>
+        <button class="remove-btn">×</button>
+    `;
+
+    // Minimal styles if not already present
+    const itemStyle = document.createElement('style');
+    itemStyle.textContent = `
+        .trade-player-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(74,158,255,0.1); border-radius: 6px; margin-bottom: 8px; border: 1px solid rgba(74,158,255,0.2); }
+        .trade-player-item .player-info { flex: 1; }
+        .trade-player-item .player-info strong { color: #ffffff; display: block; font-size: 0.9rem; }
+        .trade-player-item .player-info span { color: #b0b0b0; font-size: 0.8rem; }
+        .trade-player-item .player-rating { background: #4a9eff; color: #1a1a2e; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; margin: 0 10px; }
+        .remove-btn { background: #ff4757; color: white; border: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+        .remove-btn:hover { background: #ff3742; }
+        .add-trade-player-modal .result-item.selected { outline: 2px solid #4a9eff; }
+    `;
+    document.head.appendChild(itemStyle);
+
+    target.appendChild(el);
+    el.querySelector('.remove-btn').addEventListener('click', () => { el.remove(); updateTradeAnalysis(); });
+    updateTradeAnalysis();
 }
 
 function setupAddPlayerButtons() {
@@ -871,6 +1166,10 @@ function showPlayerDetails(playerName) {
 
 // Utility Functions
 function showNotification(message, type = 'info') {
+    // Only show popups for warnings and errors
+    if (type !== 'warning' && type !== 'error') {
+        return;
+    }
     const notification = document.createElement('div');
     notification.className = `notification ${type}`;
     notification.textContent = message;
