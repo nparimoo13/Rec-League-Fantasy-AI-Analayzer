@@ -13,6 +13,14 @@ function initializeApp() {
     setupLeagueSettings();
     setupTradeAnalyzer();
     setupPlayerInteractions();
+    initializeTeamDisplay();
+}
+
+function initializeTeamDisplay() {
+    // Show empty team display initially
+    if (apiController) {
+        apiController.showEmptyTeamDisplay();
+    }
 }
 
 // League Settings Functionality
