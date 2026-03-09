@@ -87,6 +87,16 @@
                                 Superflex League
                             </label>
                         </div>
+                        <div class="setting-group">
+                            <label for="benchSpots">Bench spots</label>
+                            <input type="number" id="benchSpots" min="0" max="10" value="6" style="width: 80px;">
+                            <span class="input-hint">Number of bench slots for your league</span>
+                        </div>
+                        <div class="setting-group">
+                            <label for="flexSpots">Flex spots</label>
+                            <input type="number" id="flexSpots" min="0" max="4" value="1" style="width: 80px;">
+                            <span class="input-hint">Number of FLEX slots in your starting lineup (max 4)</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -114,6 +124,13 @@
                     <h3>Bench</h3>
                     <!-- Dynamic content will be added here by JavaScript -->
                 </div>
+            </div>
+
+            <div class="team-analysis">
+                <button class="analyze-team-btn" type="button">
+                    <i class="fas fa-chart-pie"></i>
+                    Analyze Team
+                </button>
             </div>
         </section>
 
@@ -162,6 +179,19 @@
             </div>
         </section>
     </div>
+
+    <footer class="app-footer">
+        <div class="footer-container">
+            <div class="footer-logo">
+                <i class="fas fa-football-ball"></i>
+                <span class="footer-brand">Rec League AI Analyzer</span>
+            </div>
+            <button type="button" class="footer-contact-btn" id="footerContactBtn" aria-label="Contact us">
+                <i class="fas fa-envelope"></i>
+                Contact
+            </button>
+        </div>
+    </footer>
 
     <script src="api-controller.js"></script>
     <script src="script.js"></script>

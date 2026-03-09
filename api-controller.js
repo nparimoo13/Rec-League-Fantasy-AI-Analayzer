@@ -6,13 +6,20 @@ class FantasyAPIController {
         this.baseURL = 'https://api.sleeper.app/v1';
         this.userData = null;
         this.leagueData = null;
+        this.openAIModel = 'gpt-4o-mini';
     }
 
     // Sleeper API Methods
     async getUserByUsername(username) {
         try {
-            const response = await fetch(`${this.baseURL}/user/${username}`);
+            const normalized = String(username || '').trim().toLowerCase();
+            if (!normalized) throw new Error('Please enter your Sleeper username.');
+            const url = `${this.baseURL}/user/${encodeURIComponent(normalized)}`;
+            const response = await fetch(url);
             if (!response.ok) {
+                if (response.status === 404) {
+                    throw new Error('Username not found. Check the spelling (Sleeper usernames are case-insensitive) and try again.');
+                }
                 throw new Error(`User not found: ${response.status}`);
             }
             return await response.json();
@@ -74,6 +81,184 @@ class FantasyAPIController {
         }
     }
 
+    // ESPN Fantasy API (undocumented v3; public leagues only without cookies)
+    static getESPNPositionName(positionId) {
+        const map = { 1: 'QB', 2: 'RB', 3: 'WR', 4: 'TE', 5: 'K', 16: 'DEF' };
+        return map[positionId] || 'FLEX';
+    }
+
+    async fetchESPNLeague(leagueId, season) {
+        const year = season || new Date().getFullYear();
+        const url = `https://fantasy.espn.com/apis/v3/games/ffl/seasons/${year}/segments/0/leagues/${encodeURIComponent(leagueId)}?view=mRoster&view=mTeam&view=mSettings`;
+        const response = await fetch(url);
+        if (!response.ok) {
+            if (response.status === 404) throw new Error('League not found. Check the League ID and season.');
+            throw new Error(`ESPN request failed: ${response.status}`);
+        }
+        return await response.json();
+    }
+
+    buildESPNRosterAndPlayers(espnLeague, teamId) {
+        const team = (espnLeague.teams || []).find(t => String(t.id) === String(teamId));
+        if (!team || !team.roster || !team.roster.entries) {
+            throw new Error('Team not found in this league.');
+        }
+        const playersData = {};
+        const starters = [];
+        const allPlayerIds = [];
+        const slotToPosition = { 0: 'QB', 2: 'RB', 4: 'WR', 6: 'TE', 16: 'K', 17: 'DEF', 20: 'FLEX', 23: 'FLEX' };
+        for (const entry of team.roster.entries) {
+            const pe = entry.playerPoolEntry || entry;
+            const p = pe.player || {};
+            const pid = String(p.id || pe.playerId || '');
+            if (!pid) continue;
+            const position = FantasyAPIController.getESPNPositionName(p.defaultPositionId) || 'FLEX';
+            const proTeamId = p.proTeamId;
+            const teamAbbr = proTeamId != null ? this.espnProTeamIdToAbbr(proTeamId) : '';
+            playersData[pid] = {
+                player_id: pid,
+                id: pid,
+                full_name: p.fullName || [p.firstName, p.lastName].filter(Boolean).join(' ') || 'Unknown',
+                position,
+                team: teamAbbr
+            };
+            allPlayerIds.push(pid);
+            const slot = entry.lineupSlotId;
+            if (slot !== 21 && slot !== 22) starters.push(pid); // 21=bench, 22=IR
+        }
+        return {
+            roster: { starters, players: allPlayerIds, owner_id: String(teamId) },
+            playersData
+        };
+    }
+
+    espnProTeamIdToAbbr(proTeamId) {
+        const map = { 1: 'ATL', 2: 'BUF', 3: 'CHI', 4: 'CIN', 5: 'CLE', 6: 'DAL', 7: 'DEN', 8: 'DET', 9: 'GB', 10: 'TEN', 11: 'IND', 12: 'KC', 13: 'LV', 14: 'LAR', 15: 'MIA', 16: 'MIN', 17: 'NE', 18: 'NO', 19: 'NYG', 20: 'NYJ', 21: 'PHI', 22: 'ARI', 23: 'PIT', 24: 'LAC', 25: 'SF', 26: 'SEA', 27: 'TB', 28: 'WAS', 29: 'CAR', 30: 'JAX', 33: 'BAL', 34: 'HOU' };
+        return map[proTeamId] || '';
+    }
+
+    async connectESPNByLeagueId(leagueId, season, teamId) {
+        try {
+            showNotification('Fetching ESPN league...', 'info');
+            const espnLeague = await this.fetchESPNLeague(leagueId, season);
+            if (!espnLeague.teams || espnLeague.teams.length === 0) {
+                throw new Error('No teams found in this league.');
+            }
+            const teams = espnLeague.teams.map(t => ({
+                id: t.id,
+                name: [t.location, t.nickname].filter(Boolean).join(' ') || `Team ${t.id}`
+            }));
+            if (!teamId) {
+                this._espnPendingLeague = { espnLeague, leagueId, season };
+                this.showESPNTeamSelectionModal(teams);
+                return;
+            }
+            this.applyESPNLeagueAndRoster(espnLeague, leagueId, season, teamId);
+        } catch (error) {
+            console.error('ESPN connection error:', error);
+            showNotification(error.message || 'ESPN import failed.', 'warning');
+            throw error;
+        }
+    }
+
+    applyESPNLeagueAndRoster(espnLeague, leagueId, season, teamId) {
+        const { roster, playersData } = this.buildESPNRosterAndPlayers(espnLeague, teamId);
+        this.userData = { user_id: String(teamId) };
+        this.leagueData = {
+            name: espnLeague.name || `ESPN League ${leagueId}`,
+            league_id: leagueId,
+            settings: { dynasty: false, scoring_settings: {} },
+            rosters: [roster],
+            users: [{ user_id: String(teamId), display_name: (espnLeague.teams.find(t => String(t.id) === String(teamId)) || {}).nickname || `Team ${teamId}` }]
+        };
+        this.playersData = playersData;
+        showNotification(`Connected to ${this.leagueData.name}!`, 'success');
+        this.updateUIWithLeagueData();
+        this.updateTeamDisplayWithRoster(roster);
+        if (typeof updateTeamOverallRating === 'function') {
+            try { updateTeamOverallRating(); } catch (e) { console.error(e); }
+        }
+    }
+
+    showESPNTeamSelectionModal(teams) {
+        const modal = document.createElement('div');
+        modal.className = 'league-selection-modal espn-team-modal';
+        modal.innerHTML = `
+            <div class="modal-content">
+                <div class="modal-header">
+                    <h3><i class="fas fa-tv"></i> Select Your Team</h3>
+                    <p>Choose your team in this league</p>
+                </div>
+                <div class="modal-body">
+                    <div class="leagues-list" id="espnTeamsList">
+                        ${teams.map(t => `
+                            <div class="league-option" data-team-id="${t.id}">
+                                <div class="league-info"><h4>${t.name}</h4></div>
+                                <div class="league-select">
+                                    <button class="select-league-btn" data-team-id="${t.id}">Select</button>
+                                </div>
+                            </div>
+                        `).join('')}
+                    </div>
+                </div>
+                <div class="modal-footer"><button class="btn-cancel">Cancel</button></div>
+            </div>
+        `;
+        const style = document.createElement('style');
+        style.textContent = `.league-selection-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 1000; }
+.league-selection-modal .modal-content { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 0; border-radius: 20px; border: 2px solid #4a9eff; max-width: 500px; width: 90%; }
+.league-selection-modal .modal-header { padding: 20px; text-align: center; border-bottom: 1px solid rgba(74,158,255,0.2); }
+.league-selection-modal .modal-header h3 { color: #4a9eff; margin: 0 0 8px 0; }
+.league-selection-modal .modal-body { padding: 20px; max-height: 60vh; overflow-y: auto; }
+.league-option { display: flex; align-items: center; justify-content: space-between; padding: 16px; background: rgba(42,42,74,0.5); border: 2px solid rgba(74,158,255,0.2); border-radius: 12px; margin-bottom: 10px; cursor: pointer; }
+.league-option:hover { border-color: #4a9eff; }
+.select-league-btn { padding: 8px 16px; background: #4a9eff; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+.btn-cancel { padding: 10px 20px; background: #2a2a4a; color: #b0b0b0; border: 1px solid #4a4a6a; border-radius: 8px; cursor: pointer; }`;
+        document.head.appendChild(style);
+        document.body.appendChild(modal);
+        const pending = this._espnPendingLeague;
+        modal.querySelectorAll('.select-league-btn').forEach(btn => {
+            btn.addEventListener('click', () => {
+                const teamId = btn.getAttribute('data-team-id');
+                document.body.removeChild(modal);
+                document.head.removeChild(style);
+                if (pending) this.applyESPNLeagueAndRoster(pending.espnLeague, pending.leagueId, pending.season, teamId);
+                this._espnPendingLeague = null;
+            });
+        });
+        modal.querySelector('.btn-cancel').addEventListener('click', () => {
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+            this._espnPendingLeague = null;
+        });
+    }
+
+    // Yahoo Fantasy: requires OAuth for league/roster access; offer league ID input and friendly message
+    async connectYahooByLeagueId(leagueKey) {
+        try {
+            showNotification('Checking Yahoo league...', 'info');
+            const key = String(leagueKey || '').trim();
+            if (!key) throw new Error('Please enter your Yahoo League ID or league key (e.g. nfl.l.12345).');
+            const url = `https://fantasysports.yahooapis.com/fantasy/v2/league/${encodeURIComponent(key)}`;
+            const response = await fetch(url);
+            if (!response.ok) {
+                if (response.status === 401 || response.status === 403) {
+                    throw new Error('Yahoo Fantasy requires sign-in. Use ESPN or Sleeper import, or enter your lineup manually.');
+                }
+                throw new Error('Could not load Yahoo league. Yahoo requires app sign-in for league data.');
+            }
+            const text = await response.text();
+            if (!text || text.includes('Unauthorized') || text.includes('oauth')) {
+                throw new Error('Yahoo Fantasy requires sign-in. Use ESPN or Sleeper import, or enter your lineup manually.');
+            }
+            showNotification('Yahoo league loaded. Full roster import requires Yahoo sign-in.', 'info');
+        } catch (error) {
+            console.error('Yahoo connection error:', error);
+            showNotification(error.message || 'Yahoo import is not available without sign-in.', 'warning');
+            throw error;
+        }
+    }
+
     // Main integration method
     async connectSleeperAccount(username) {
         try {
@@ -83,12 +268,14 @@ class FantasyAPIController {
             this.userData = await this.getUserByUsername(username);
             console.log('User data:', this.userData);
             
-            // Get user's leagues for current season
-            const leagues = await this.getUserLeagues(this.userData.user_id);
-            console.log('User leagues:', leagues);
-            
+            // Get user's leagues: try current year first, then previous (off-season often has no leagues for next year yet)
+            const currentYear = new Date().getFullYear();
+            let leagues = await this.getUserLeagues(this.userData.user_id, currentYear);
+            if (leagues.length === 0 && currentYear > 2018) {
+                leagues = await this.getUserLeagues(this.userData.user_id, currentYear - 1);
+            }
             if (leagues.length === 0) {
-                throw new Error('No leagues found for this user');
+                throw new Error('No leagues found for this user. If it\'s off-season, your leagues may be under the previous season—we already checked this year and last.');
             }
             
             // Store all leagues for user selection
@@ -416,9 +603,14 @@ class FantasyAPIController {
     async selectLeague(selectedLeague) {
         try {
             showNotification(`Loading ${selectedLeague.name}...`, 'info');
-            
             this.leagueData = selectedLeague;
-            
+            if (selectedLeague.roster_positions && Array.isArray(selectedLeague.roster_positions)) {
+                this.leagueData.settings = this.leagueData.settings || {};
+                const benchCount = selectedLeague.roster_positions.filter(p => String(p).toUpperCase() === 'BN').length;
+                if (benchCount > 0) this.leagueData.settings.bench_spots = benchCount;
+                const flexCount = selectedLeague.roster_positions.filter(p => String(p).toUpperCase() === 'FLEX').length;
+                if (flexCount > 0) this.leagueData.settings.flex_spots = Math.min(4, flexCount);
+            }
             // Get league rosters and users
             const [rosters, users] = await Promise.all([
                 this.getLeagueRosters(selectedLeague.league_id),
@@ -493,13 +685,14 @@ class FantasyAPIController {
             benchSection.innerHTML = '<h3>Bench</h3>';
         }
 
-        // Define position groups and their requirements
+        // Define position groups and their requirements (flex count from settings)
+        const flexCount = this.getFlexSpots();
         const positionGroups = {
             'QB': { count: 1, container: 'lineup-section' },
             'RB': { count: 2, container: 'lineup-section' },
             'WR': { count: 2, container: 'lineup-section' },
             'TE': { count: 1, container: 'lineup-section' },
-            'FLEX': { count: 1, container: 'lineup-section' },
+            'FLEX': { count: flexCount, container: 'lineup-section' },
             'K': { count: 1, container: 'lineup-section' },
             'DEF': { count: 1, container: 'lineup-section' }
         };
@@ -517,43 +710,57 @@ class FantasyAPIController {
 
         // Add bench players
         this.createBenchSection(rosterPlayers);
+
+        // Update overall team rating based on current lineup
+        if (typeof updateTeamOverallRating === 'function') {
+            try {
+                updateTeamOverallRating();
+            } catch (e) {
+                console.error('Failed to update team overall rating:', e);
+            }
+        }
+    }
+
+    getPlayerDisplayName(player) {
+        if (!player) return 'Player';
+        const name = player.full_name || [player.first_name, player.last_name].filter(Boolean).join(' ').trim();
+        if (name) return name;
+        const pos = (player.position || '').toUpperCase();
+        if (pos === 'DEF' || pos === 'DST' || pos === 'D') {
+            const team = player.team || player.player_id || '';
+            const teamName = this.getTeamDisplayName(team);
+            return teamName ? teamName + ' Defense' : (team ? team + ' Defense' : 'Team Defense');
+        }
+        return 'Player';
+    }
+
+    getTeamDisplayName(abbr) {
+        const map = { ATL: 'Atlanta Falcons', BUF: 'Buffalo Bills', CHI: 'Chicago Bears', CIN: 'Cincinnati Bengals', CLE: 'Cleveland Browns', DAL: 'Dallas Cowboys', DEN: 'Denver Broncos', DET: 'Detroit Lions', GB: 'Green Bay Packers', TEN: 'Tennessee Titans', IND: 'Indianapolis Colts', KC: 'Kansas City Chiefs', LV: 'Las Vegas Raiders', LAR: 'Los Angeles Rams', LAC: 'Los Angeles Chargers', MIA: 'Miami Dolphins', MIN: 'Minnesota Vikings', NE: 'New England Patriots', NO: 'New Orleans Saints', NYG: 'New York Giants', NYJ: 'New York Jets', PHI: 'Philadelphia Eagles', ARI: 'Arizona Cardinals', PIT: 'Pittsburgh Steelers', SF: 'San Francisco 49ers', SEA: 'Seattle Seahawks', TB: 'Tampa Bay Buccaneers', WAS: 'Washington Commanders', CAR: 'Carolina Panthers', JAX: 'Jacksonville Jaguars', BAL: 'Baltimore Ravens', HOU: 'Houston Texans' };
+        return map[(abbr || '').toUpperCase()] || '';
     }
 
     getRosterPlayers(roster) {
         const players = [];
-        
-        // Process starting lineup
+        const toRosterPlayer = (player, playerId, isStarter) => {
+            const displayName = this.getPlayerDisplayName(player);
+            return { ...player, full_name: player.full_name || displayName, player_id: playerId, isStarter };
+        };
         if (roster.starters) {
             roster.starters.forEach(playerId => {
                 if (playerId && playerId !== '0') {
                     const player = this.playersData[playerId];
-                    if (player) {
-                        players.push({
-                            ...player,
-                            player_id: playerId,
-                            isStarter: true
-                        });
-                    }
+                    if (player) players.push(toRosterPlayer(player, playerId, true));
                 }
             });
         }
-
-        // Process bench players
         if (roster.players) {
             roster.players.forEach(playerId => {
                 if (playerId && playerId !== '0' && !roster.starters?.includes(playerId)) {
                     const player = this.playersData[playerId];
-                    if (player) {
-                        players.push({
-                            ...player,
-                            player_id: playerId,
-                            isStarter: false
-                        });
-                    }
+                    if (player) players.push(toRosterPlayer(player, playerId, false));
                 }
             });
         }
-
         return players;
     }
 
@@ -601,11 +808,16 @@ class FantasyAPIController {
     getPlayerImageCandidates(player) {
         const playerId = player.player_id || player.playerId || player.player?.player_id || player.id;
         const candidates = [];
+        // Team defense: use ESPN team logo (id like 'T33', team like 'BAL')
+        const idStr = playerId != null ? String(playerId) : '';
+        if (idStr.startsWith('T') && player.team) {
+            candidates.push(`https://a.espncdn.com/i/teamlogos/nfl/500/${String(player.team).toLowerCase()}.png`);
+        }
         // If an explicit image URL was provided (e.g., from ESPN), try it first
         if (player.image) {
             candidates.push(player.image);
         }
-        if (playerId) {
+        if (playerId && !idStr.startsWith('T')) {
             // Common Sleeper headshot locations
             candidates.push(
                 `https://sleepercdn.com/content/nfl/players/thumb/${playerId}.jpg`,
@@ -615,7 +827,19 @@ class FantasyAPIController {
             );
         }
         // Always end with placeholder so image never breaks
-        candidates.push(`https://via.placeholder.com/60x60/1a1a2e/ffffff?text=${player.position || ''}`);
+        const labelSource =
+            player.full_name ||
+            (player.first_name && player.last_name && `${player.first_name} ${player.last_name}`) ||
+            player.position ||
+            '';
+        const initials = String(labelSource)
+            .split(' ')
+            .filter(Boolean)
+            .map(part => part[0])
+            .join('')
+            .slice(0, 3)
+            .toUpperCase() || 'NFL';
+        candidates.push(`https://via.placeholder.com/60x60/1a1a2e/ffffff?text=${encodeURIComponent(initials)}`);
         return candidates;
     }
 
@@ -641,6 +865,11 @@ class FantasyAPIController {
         playerCard.className = 'player-card';
         if (isBench) playerCard.classList.add('bench');
         playerCard.setAttribute('data-slot-position', slotPosition || '');
+        const pid = player.player_id || player.id;
+        const displayName = this.getPlayerDisplayName(player);
+        if (pid != null) playerCard.setAttribute('data-player-id', String(pid));
+        playerCard.setAttribute('data-player-name', displayName);
+        if (player.team != null) playerCard.setAttribute('data-player-team', String(player.team));
         
         const playerImage = document.createElement('div');
         playerImage.className = 'player-image';
@@ -650,8 +879,8 @@ class FantasyAPIController {
         const playerInfo = document.createElement('div');
         playerInfo.className = 'player-info';
         playerInfo.innerHTML = `
-            <h5>${player.full_name}</h5>
-            <p class="position">${player.position} - ${player.team}</p>
+            <h5>${displayName}</h5>
+            <p class="position">${player.position || ''} - ${player.team || ''}</p>
             <div class="rating">${this.calculatePlayerRating(player)}</div>
         `;
         
@@ -664,10 +893,19 @@ class FantasyAPIController {
             const parent = playerCard.parentElement;
             const slotPos = playerCard.getAttribute('data-slot-position');
             playerCard.remove();
-            // If lineup slot (not bench) then restore placeholder
             if (!isBench && slotPos) {
                 const placeholder = this.createPlayerPlaceholder(slotPos);
                 parent.appendChild(placeholder);
+            } else if (isBench && parent && parent.classList.contains('bench-players')) {
+                parent.appendChild(this.createBenchPlaceholder());
+            }
+            // Recalculate team rating after removal
+            if (typeof updateTeamOverallRating === 'function') {
+                try {
+                    updateTeamOverallRating();
+                } catch (err) {
+                    console.error('Failed to update team overall rating after removal:', err);
+                }
             }
         });
 
@@ -676,6 +914,42 @@ class FantasyAPIController {
         playerCard.appendChild(removeBtn);
         
         return playerCard;
+    }
+
+    getBenchSize() {
+        if (this.leagueData && this.leagueData.settings && this.leagueData.settings.bench_spots != null) {
+            const n = parseInt(this.leagueData.settings.bench_spots, 10);
+            if (!isNaN(n) && n >= 0) return Math.min(10, n);
+        }
+        try {
+            const saved = typeof localStorage !== 'undefined' && localStorage.getItem('leagueSettings');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed.benchSpots != null) {
+                    const n = parseInt(parsed.benchSpots, 10);
+                    if (!isNaN(n) && n >= 0) return Math.min(10, Math.max(0, n));
+                }
+            }
+        } catch (e) {}
+        return 6;
+    }
+
+    getFlexSpots() {
+        if (this.leagueData && this.leagueData.settings && this.leagueData.settings.flex_spots != null) {
+            const n = parseInt(this.leagueData.settings.flex_spots, 10);
+            if (!isNaN(n) && n >= 0) return Math.min(4, Math.max(0, n));
+        }
+        try {
+            const saved = typeof localStorage !== 'undefined' && localStorage.getItem('leagueSettings');
+            if (saved) {
+                const parsed = JSON.parse(saved);
+                if (parsed.flexSpots != null) {
+                    const n = parseInt(parsed.flexSpots, 10);
+                    if (!isNaN(n) && n >= 0) return Math.min(4, Math.max(0, n));
+                }
+            }
+        } catch (e) {}
+        return 1;
     }
 
     createPlayerPlaceholder(position) {
@@ -703,7 +977,52 @@ class FantasyAPIController {
         return placeholder;
     }
 
+    createBenchPlaceholder() {
+        const placeholder = document.createElement('div');
+        placeholder.className = 'player-card placeholder bench';
+        placeholder.setAttribute('data-slot-position', 'BENCH');
+        placeholder.innerHTML = `
+            <div class="player-image">
+                <div class="placeholder-icon">+</div>
+            </div>
+            <div class="player-info">
+                <h5>Add Bench</h5>
+                <p class="position">Click to add player</p>
+                <div class="rating">--</div>
+            </div>
+        `;
+        placeholder.addEventListener('click', () => {
+            if (typeof showGlobalAddPlayerModal === 'function') {
+                showGlobalAddPlayerModal({ mode: 'lineup', position: 'BENCH' });
+            }
+        });
+        return placeholder;
+    }
+
     addPlayerToLineup(position, playerData) {
+        const slotUpper = (position || '').toUpperCase();
+        if (slotUpper === 'BENCH') {
+            return this.addPlayerToBench(playerData);
+        }
+        // Enforce position rules: only allow players in their respective slot (FLEX accepts all)
+        const playerPos = (playerData && playerData.position || '').trim();
+        if (typeof isPlayerPositionAllowedForSlot === 'function' && !isPlayerPositionAllowedForSlot(playerPos, position)) {
+            return false;
+        }
+        // Prevent duplicate: same player already in lineup or bench
+        const newId = playerData && (playerData.id ?? playerData.player_id);
+        const newKey = playerData && (playerData.full_name || '') + '|' + (playerData.team || '');
+        const lineupCards = document.querySelectorAll('.lineup-section .player-card:not(.placeholder)');
+        const benchCards = document.querySelectorAll('.bench-section .player-card');
+        const allCards = [...lineupCards, ...benchCards];
+        for (const card of allCards) {
+            const existingId = card.getAttribute('data-player-id');
+            const existingName = card.getAttribute('data-player-name');
+            const existingTeam = card.getAttribute('data-player-team') || '';
+            const existingKey = (existingName || '') + '|' + existingTeam;
+            if (newId && existingId && String(newId) === String(existingId)) return 'duplicate';
+            if (newKey && existingKey && newKey === existingKey) return 'duplicate';
+        }
         // Find the first placeholder in the requested position group and replace it
         const groups = document.querySelectorAll('.lineup-section .position-group');
         for (let i = 0; i < groups.length; i++) {
@@ -721,34 +1040,65 @@ class FantasyAPIController {
                     image: playerData.image
                 }, position, false);
                 groups[i].replaceChild(card, placeholder);
+                if (typeof updateTeamOverallRating === 'function') {
+                    try {
+                        updateTeamOverallRating();
+                    } catch (e) {
+                        console.error('Failed to update team overall rating after adding player:', e);
+                    }
+                }
                 return true;
             }
         }
         return false;
     }
 
+    addPlayerToBench(playerData) {
+        const newId = playerData && (playerData.id ?? playerData.player_id);
+        const newKey = playerData && (playerData.full_name || '') + '|' + (playerData.team || '');
+        const lineupCards = document.querySelectorAll('.lineup-section .player-card:not(.placeholder)');
+        const benchCards = document.querySelectorAll('.bench-section .player-card');
+        const allCards = [...lineupCards, ...benchCards];
+        for (const card of allCards) {
+            const existingId = card.getAttribute('data-player-id');
+            const existingName = card.getAttribute('data-player-name');
+            const existingTeam = card.getAttribute('data-player-team') || '';
+            const existingKey = (existingName || '') + '|' + existingTeam;
+            if (newId && existingId && String(newId) === String(existingId)) return 'duplicate';
+            if (newKey && existingKey && newKey === existingKey) return 'duplicate';
+        }
+        const benchPlaceholder = document.querySelector('.bench-section .player-card.placeholder');
+        if (!benchPlaceholder) return false;
+        const card = this.createPlayerCard({
+            full_name: playerData.full_name,
+            position: playerData.position,
+            team: playerData.team,
+            id: playerData.id,
+            player_id: playerData.player_id,
+            image: playerData.image
+        }, null, true);
+        benchPlaceholder.parentElement.replaceChild(card, benchPlaceholder);
+        if (typeof updateTeamOverallRating === 'function') {
+            try { updateTeamOverallRating(); } catch (e) { console.error(e); }
+        }
+        return true;
+    }
+
     createBenchSection(rosterPlayers) {
         const benchSection = document.querySelector('.bench-section');
         if (!benchSection) return;
-
-        const benchPlayers = rosterPlayers.filter(player => !player.isStarter);
-        
-        if (benchPlayers.length > 0) {
-            const benchContainer = document.createElement('div');
-            benchContainer.className = 'bench-players';
-            
-            benchPlayers.forEach(player => {
-                const playerCard = this.createPlayerCard(player, null, true);
-                benchContainer.appendChild(playerCard);
-            });
-            
-            benchSection.appendChild(benchContainer);
-        } else {
-            const emptyBench = document.createElement('div');
-            emptyBench.className = 'empty-bench';
-            emptyBench.innerHTML = '<p>No bench players</p>';
-            benchSection.appendChild(emptyBench);
+        const benchList = rosterPlayers.filter(player => !player.isStarter);
+        const benchSize = this.getBenchSize();
+        const benchContainer = document.createElement('div');
+        benchContainer.className = 'bench-players';
+        benchList.forEach(player => {
+            benchContainer.appendChild(this.createPlayerCard(player, null, true));
+        });
+        const placeholderCount = Math.max(0, benchSize - benchList.length);
+        for (let i = 0; i < placeholderCount; i++) {
+            benchContainer.appendChild(this.createBenchPlaceholder());
         }
+        benchSection.appendChild(benchContainer);
     }
 
     calculatePlayerRating(player) {
@@ -767,17 +1117,60 @@ class FantasyAPIController {
         }
         
         if (benchSection) {
-            benchSection.innerHTML = '<h3>Bench</h3><div class="bench-players"><p>No players added yet</p></div>';
+            const benchSize = this.getBenchSize();
+            benchSection.innerHTML = '<h3>Bench</h3>';
+            const benchContainer = document.createElement('div');
+            benchContainer.className = 'bench-players';
+            for (let i = 0; i < benchSize; i++) {
+                benchContainer.appendChild(this.createBenchPlaceholder());
+            }
+            benchSection.appendChild(benchContainer);
+        }
+
+        if (typeof updateTeamOverallRating === 'function') {
+            try { updateTeamOverallRating(); } catch (e) { console.error('Failed to reset team overall rating:', e); }
+        }
+    }
+
+    refreshBenchSlots() {
+        const benchSection = document.querySelector('.bench-section');
+        if (!benchSection) return;
+        let benchPlayers = benchSection.querySelector('.bench-players');
+        const wantTotal = this.getBenchSize();
+        const currentCards = benchPlayers ? Array.from(benchPlayers.querySelectorAll('.player-card')) : [];
+        const filled = currentCards.filter(c => !c.classList.contains('placeholder'));
+        const placeholders = currentCards.filter(c => c.classList.contains('placeholder'));
+        const currentTotal = currentCards.length;
+        if (currentTotal === wantTotal) return;
+        if (!benchPlayers) {
+            benchSection.innerHTML = '<h3>Bench</h3>';
+            benchPlayers = document.createElement('div');
+            benchPlayers.className = 'bench-players';
+            benchSection.appendChild(benchPlayers);
+            filled.forEach(card => benchPlayers.appendChild(card));
+            for (let i = 0; i < wantTotal - filled.length; i++) benchPlayers.appendChild(this.createBenchPlaceholder());
+            return;
+        }
+        if (currentTotal > wantTotal) {
+            let toRemove = currentTotal - wantTotal;
+            placeholders.forEach(p => {
+                if (toRemove > 0 && p.parentNode) { p.parentNode.removeChild(p); toRemove--; }
+            });
+            return;
+        }
+        for (let i = 0; i < wantTotal - currentTotal; i++) {
+            benchPlayers.appendChild(this.createBenchPlaceholder());
         }
     }
 
     createEmptyPositionGroups(container) {
+        const flexCount = this.getFlexSpots();
         const positions = [
             { name: 'QB', count: 1 },
             { name: 'RB', count: 2 },
             { name: 'WR', count: 2 },
             { name: 'TE', count: 1 },
-            { name: 'FLEX', count: 1 },
+            { name: 'FLEX', count: flexCount },
             { name: 'K', count: 1 },
             { name: 'DEF', count: 1 }
         ];
@@ -805,12 +1198,240 @@ class FantasyAPIController {
     }
 
     // Trade analysis methods
-    async analyzeTrade(givingPlayers, receivingPlayers) {
-        // This would integrate with your existing trade analysis
-        // but could also pull in Sleeper-specific data
+    getOpenAIBaseUrl() {
+        if (typeof window === 'undefined') return '';
+        return (window.APP_API_URL || '').replace(/\/$/, '');
+    }
+
+    getOpenAIApiKey() {
+        try {
+            let key = (typeof window !== 'undefined' && window.OPENAI_API_KEY) || localStorage.getItem('openai_api_key') || '';
+            if (!key && typeof window !== 'undefined') {
+                const entered = window.prompt(
+                    'Enter your OpenAI API key to enable AI-powered trade analysis. This key will be stored locally in your browser.'
+                );
+                if (entered && entered.trim()) {
+                    key = entered.trim();
+                    localStorage.setItem('openai_api_key', key);
+                }
+            }
+            return key;
+        } catch (e) {
+            console.error('Error retrieving OpenAI API key:', e);
+            return '';
+        }
+    }
+
+    async analyzeTradeWithOpenAI(givingPlayers, receivingPlayers) {
+        const baseUrl = this.getOpenAIBaseUrl();
+        try {
+            const response = await fetch((baseUrl ? baseUrl + '/' : '') + 'api/analyze-trade', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        givingPlayers,
+                        receivingPlayers,
+                        model: this.openAIModel
+                    })
+                });
+            if (response.ok) {
+                const data = await response.json();
+                return {
+                    fairness: data.fairness || 'Fair',
+                    grade: typeof data.grade === 'number' ? data.grade : 50,
+                    summary: data.summary || ''
+                };
+            }
+        } catch (e) {
+            console.warn('Backend AI unavailable, falling back to client key:', e.message);
+        }
+        const apiKey = this.getOpenAIApiKey();
+        if (!apiKey) {
+            throw new Error('OpenAI API key is required for AI trade analysis. Use the server (see README) or enter your key when prompted.');
+        }
+
+        const payload = {
+            model: this.openAIModel,
+            temperature: 0.4,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'You are an expert fantasy football trade analyst. Given players involved in a trade, ' +
+                        "you evaluate it strictly from the perspective of the user's team. " +
+                        'Respond with concise, actionable insight.'
+                },
+                {
+                    role: 'user',
+                    content:
+                        'You are analyzing a fantasy football trade. ' +
+                        'The players my team is GIVING and RECEIVING are provided below as JSON. ' +
+                        'Each player has name, position, and a numeric rating (higher is better).\n\n' +
+                        'GIVING:\n' +
+                        JSON.stringify(givingPlayers, null, 2) +
+                        '\n\nRECEIVING:\n' +
+                        JSON.stringify(receivingPlayers, null, 2) +
+                        '\n\n' +
+                        'Return ONLY a JSON object (no extra text) with this shape:\n' +
+                        '{\n' +
+                        '  "fairness": "Favorable" | "Fair" | "Unfavorable",\n' +
+                        '  "grade": number, // 0-100 overall grade for MY side\n' +
+                        '  "summary": string // 2-4 short sentences of advice\n' +
+                        '}'
+                }
+            ]
+        };
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            console.error('OpenAI API error response:', text);
+            throw new Error(`OpenAI API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const content =
+            (data &&
+                data.choices &&
+                data.choices[0] &&
+                data.choices[0].message &&
+                data.choices[0].message.content) ||
+            '';
+
+        if (!content) {
+            throw new Error('OpenAI returned an empty response for trade analysis.');
+        }
+
+        let parsed;
+        try {
+            parsed = JSON.parse(content);
+        } catch (e) {
+            console.warn('Failed to parse OpenAI JSON, using raw content as summary.', e);
+            parsed = {
+                fairness: 'Fair',
+                grade: 50,
+                summary: content
+            };
+        }
+
         return {
-            netValue: 0,
-            recommendation: 'Trade analysis using Sleeper data'
+            fairness: parsed.fairness || 'Fair',
+            grade: typeof parsed.grade === 'number' ? parsed.grade : 50,
+            summary: parsed.summary || ''
+        };
+    }
+
+    async analyzeTeamWithOpenAI(lineupPlayers, benchPlayers) {
+        const baseUrl = this.getOpenAIBaseUrl();
+        try {
+            const response = await fetch((baseUrl ? baseUrl + '/' : '') + 'api/analyze-team', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    lineupPlayers,
+                    benchPlayers,
+                    model: this.openAIModel
+                })
+            });
+            if (response.ok) {
+                return await response.json();
+            }
+        } catch (e) {
+            console.warn('Backend AI unavailable, falling back to client key:', e.message);
+        }
+        const apiKey = this.getOpenAIApiKey();
+        if (!apiKey) {
+            throw new Error('OpenAI API key is required for AI team analysis. Use the server (see README) or enter your key when prompted.');
+        }
+
+        const payload = {
+            model: this.openAIModel,
+            temperature: 0.4,
+            messages: [
+                {
+                    role: 'system',
+                    content:
+                        'You are an expert fantasy football analyst. Given a starting lineup and bench, ' +
+                        'you provide actionable advice: strengths, weaknesses, trade targets, players to trade away, and drop candidates. ' +
+                        'Be specific with player names and positions. Respond with valid JSON only.'
+                },
+                {
+                    role: 'user',
+                    content:
+                        'Analyze this fantasy football roster.\n\n' +
+                        'STARTING LINEUP (with slot and rating):\n' +
+                        JSON.stringify(lineupPlayers, null, 2) +
+                        '\n\nBENCH:\n' +
+                        JSON.stringify(benchPlayers, null, 2) +
+                        '\n\nReturn ONLY a JSON object (no markdown, no extra text) with this exact shape:\n' +
+                        '{\n' +
+                        '  "strengths": "2-4 sentences on where this team is strong (positions, depth, etc.)",\n' +
+                        '  "needsHelp": "2-4 sentences on where the team is weak or could improve",\n' +
+                        '  "tradeTargets": "2-4 specific player types or positions to target (e.g. upgrade at RB2, add WR depth)",\n' +
+                        '  "tradeAway": "2-4 sentences on which players to consider trading away to improve the team",\n' +
+                        '  "dropCandidates": "2-4 sentences on bench players who could be dropped for waivers or upgrades"\n' +
+                        '}'
+                }
+            ]
+        };
+
+        const response = await fetch('https://api.openai.com/v1/chat/completions', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json',
+                Authorization: `Bearer ${apiKey}`
+            },
+            body: JSON.stringify(payload)
+        });
+
+        if (!response.ok) {
+            const text = await response.text().catch(() => '');
+            console.error('OpenAI API error response:', text);
+            throw new Error(`OpenAI API error: ${response.status}`);
+        }
+
+        const data = await response.json();
+        const content =
+            (data &&
+                data.choices &&
+                data.choices[0] &&
+                data.choices[0].message &&
+                data.choices[0].message.content) ||
+            '';
+
+        if (!content) {
+            throw new Error('OpenAI returned an empty response for team analysis.');
+        }
+
+        const trimmed = content.replace(/^```json?\s*|\s*```$/g, '').trim();
+        let parsed;
+        try {
+            parsed = JSON.parse(trimmed);
+        } catch (e) {
+            console.warn('Failed to parse OpenAI team analysis JSON, using raw as summary.', e);
+            parsed = {
+                strengths: '',
+                needsHelp: content,
+                tradeTargets: '',
+                tradeAway: '',
+                dropCandidates: ''
+            };
+        }
+
+        return {
+            strengths: parsed.strengths || '',
+            needsHelp: parsed.needsHelp || '',
+            tradeTargets: parsed.tradeTargets || '',
+            tradeAway: parsed.tradeAway || '',
+            dropCandidates: parsed.dropCandidates || ''
         };
     }
 

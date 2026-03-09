@@ -1,0 +1,17 @@
+{
+  "name": "rec-league-fantasy-ai-analyzer",
+  "version": "1.0.0",
+  "description": "Fantasy football trade and team analysis with AI",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "engines": {
+    "node": ">=18.0.0"
+  },
+  "dependencies": {
+    "dotenv": "^16.3.1",
+    "express": "^4.18.2"
+  }
+}

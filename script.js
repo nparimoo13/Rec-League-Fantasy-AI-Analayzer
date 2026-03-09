@@ -3,6 +3,7 @@
 
 // Initialize API Controller (loaded from external file)
 const apiController = new FantasyAPIController();
+if (typeof window !== 'undefined') window.apiController = apiController;
 
 document.addEventListener('DOMContentLoaded', function() {
     // Initialize the application
@@ -12,6 +13,8 @@ document.addEventListener('DOMContentLoaded', function() {
 function initializeApp() {
     setupLeagueSettings();
     setupTradeAnalyzer();
+    setupAnalyzeTeam();
+    setupFooterContact();
     setupPlayerInteractions();
     initializeTeamDisplay();
 }
@@ -27,7 +30,19 @@ function initializeTeamDisplay() {
 function setupLeagueSettings() {
     const manualToggle = document.getElementById('manualMode');
     const manualSettings = document.getElementById('manualSettings');
-    
+    const benchSpotsInput = document.getElementById('benchSpots');
+    const flexSpotsInput = document.getElementById('flexSpots');
+    try {
+        const saved = JSON.parse(localStorage.getItem('leagueSettings') || '{}');
+        if (saved.benchSpots != null && benchSpotsInput) {
+            const n = Math.min(10, Math.max(0, parseInt(saved.benchSpots, 10)));
+            if (!isNaN(n)) benchSpotsInput.value = n;
+        }
+        if (saved.flexSpots != null && flexSpotsInput) {
+            const n = Math.min(4, Math.max(0, parseInt(saved.flexSpots, 10)));
+            if (!isNaN(n)) flexSpotsInput.value = n;
+        }
+    } catch (e) {}
     // Toggle manual settings visibility
     manualToggle.addEventListener('change', function() {
         if (this.checked) {
@@ -47,11 +62,13 @@ function setupLeagueSettings() {
             // Add active class to clicked button
             this.classList.add('active');
             
-            // Check if it's the Sleeper button
             if (this.classList.contains('sleeper')) {
                 showSleeperUsernamePopup();
+            } else if (this.classList.contains('espn')) {
+                showESPNImportPopup();
+            } else if (this.classList.contains('yahoo')) {
+                showYahooImportPopup();
             } else {
-                // Show connection modal or API integration for other providers
                 showProviderConnection(this.textContent.trim());
             }
         });
@@ -61,10 +78,13 @@ function setupLeagueSettings() {
     const scoringFormat = document.getElementById('scoringFormat');
     const leagueType = document.getElementById('leagueType');
     const superflex = document.getElementById('superflex');
-    
-    [scoringFormat, leagueType, superflex].forEach(element => {
-        element.addEventListener('change', updateLeagueSettings);
+    const benchSpots = document.getElementById('benchSpots');
+    const flexSpots = document.getElementById('flexSpots');
+    [scoringFormat, leagueType, superflex, benchSpots, flexSpots].forEach(element => {
+        if (element) element.addEventListener('change', updateLeagueSettings);
     });
+    if (benchSpots) benchSpots.addEventListener('input', updateLeagueSettings);
+    if (flexSpots) flexSpots.addEventListener('input', updateLeagueSettings);
 }
 
 function showSleeperUsernamePopup() {
@@ -249,9 +269,11 @@ function showSleeperUsernamePopup() {
             document.body.removeChild(modal);
             document.head.removeChild(style);
         } catch (error) {
-            // Re-enable button on error
             connectBtn.disabled = false;
             connectBtn.innerHTML = '<i class="fas fa-link"></i> Connect';
+            const msg = error && error.message ? error.message : 'Connection failed';
+            const isNetwork = /failed to fetch|network|load/i.test(msg);
+            showNotification(isNetwork ? 'Could not reach Sleeper. Check your connection or try again.' : msg, 'warning');
         }
     });
     
@@ -275,6 +297,167 @@ function showSleeperUsernamePopup() {
             connectBtn.click();
         }
     });
+}
+
+function showESPNImportPopup() {
+    const modal = document.createElement('div');
+    modal.className = 'sleeper-modal espn-import-modal';
+    const currentYear = new Date().getFullYear();
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fas fa-tv"></i> Import from ESPN</h3>
+                <p>Enter your League ID and season to load your league and pick your team</p>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label for="espnLeagueId">League ID</label>
+                    <input type="text" id="espnLeagueId" placeholder="e.g. 123456" inputmode="numeric">
+                    <div class="input-help">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Find this in your league URL: fantasy.espn.com/football/...leagueId=<strong>123456</strong></span>
+                    </div>
+                </div>
+                <div class="input-group">
+                    <label for="espnSeason">Season</label>
+                    <input type="text" id="espnSeason" placeholder="${currentYear}" value="${currentYear}" inputmode="numeric">
+                </div>
+                <div class="input-group">
+                    <label for="espnTeamId">Your Team ID (optional)</label>
+                    <input type="text" id="espnTeamId" placeholder="Leave blank to pick from list">
+                    <div class="input-help">
+                        <i class="fas fa-info-circle"></i>
+                        <span>In the URL: teamId=<strong>7</strong>. If blank, you'll choose your team after loading.</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel">Cancel</button>
+                <button class="btn-connect" id="connectESPN">
+                    <i class="fas fa-link"></i> Import League
+                </button>
+            </div>
+        </div>
+    `;
+    const style = document.createElement('style');
+    style.textContent = `
+        .espn-import-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(5px); }
+        .espn-import-modal .modal-content { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 0; border-radius: 20px; border: 2px solid #e31937; max-width: 450px; width: 90%; box-shadow: 0 20px 40px rgba(0,0,0,0.5); overflow: hidden; }
+        .espn-import-modal .modal-header { padding: 30px 30px 20px; text-align: center; border-bottom: 1px solid rgba(227,25,55,0.2); }
+        .espn-import-modal .modal-header h3 { color: #e31937; margin-bottom: 10px; font-size: 1.5rem; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .espn-import-modal .modal-header p { color: #b0b0b0; font-size: 1rem; line-height: 1.5; }
+        .espn-import-modal .modal-body { padding: 30px; }
+        .espn-import-modal .input-group { display: flex; flex-direction: column; gap: 15px; }
+        .espn-import-modal .input-group label { color: #e31937; font-weight: 600; font-size: 1rem; }
+        .espn-import-modal .input-group input { background: #0f0f1a; border: 2px solid #e31937; color: white; padding: 15px 20px; border-radius: 10px; font-size: 1rem; }
+        .espn-import-modal .input-help { display: flex; align-items: center; gap: 8px; color: #b0b0b0; font-size: 0.9rem; }
+        .espn-import-modal .modal-footer { padding: 20px 30px 30px; display: flex; gap: 15px; justify-content: flex-end; }
+        .espn-import-modal .btn-cancel { padding: 12px 24px; background: #2a2a4a; color: #b0b0b0; border: 1px solid #4a4a6a; border-radius: 8px; cursor: pointer; }
+        .espn-import-modal .btn-connect { padding: 12px 24px; background: linear-gradient(135deg, #e31937 0%, #c41230 100%); color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    const leagueIdInput = modal.querySelector('#espnLeagueId');
+    const seasonInput = modal.querySelector('#espnSeason');
+    const teamIdInput = modal.querySelector('#espnTeamId');
+    leagueIdInput.focus();
+    const connectBtn = modal.querySelector('#connectESPN');
+    const cancelBtn = modal.querySelector('.btn-cancel');
+    connectBtn.addEventListener('click', async () => {
+        const leagueId = leagueIdInput.value.trim();
+        const season = seasonInput.value.trim() || currentYear;
+        const teamId = teamIdInput.value.trim() || null;
+        if (!leagueId) {
+            showNotification('Please enter your ESPN League ID.', 'warning');
+            return;
+        }
+        connectBtn.disabled = true;
+        connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Loading...';
+        try {
+            await apiController.connectESPNByLeagueId(leagueId, season, teamId);
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        } catch (err) {
+            connectBtn.disabled = false;
+            connectBtn.innerHTML = '<i class="fas fa-link"></i> Import League';
+            showNotification(err.message || 'ESPN import failed.', 'warning');
+        }
+    });
+    cancelBtn.addEventListener('click', () => { document.body.removeChild(modal); document.head.removeChild(style); });
+    modal.addEventListener('click', (e) => { if (e.target === modal) { document.body.removeChild(modal); document.head.removeChild(style); } });
+    leagueIdInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') connectBtn.click(); });
+}
+
+function showYahooImportPopup() {
+    const modal = document.createElement('div');
+    modal.className = 'sleeper-modal yahoo-import-modal';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <div class="modal-header">
+                <h3><i class="fab fa-yahoo"></i> Import from Yahoo</h3>
+                <p>Yahoo Fantasy requires sign-in for league data. You can try your League ID for public leagues.</p>
+            </div>
+            <div class="modal-body">
+                <div class="input-group">
+                    <label for="yahooLeagueKey">League ID / League Key</label>
+                    <input type="text" id="yahooLeagueKey" placeholder="e.g. nfl.l.12345">
+                    <div class="input-help">
+                        <i class="fas fa-info-circle"></i>
+                        <span>Find in your league URL. Full roster import may require Yahoo sign-in (coming later).</span>
+                    </div>
+                </div>
+            </div>
+            <div class="modal-footer">
+                <button class="btn-cancel">Cancel</button>
+                <button class="btn-connect" id="connectYahoo">
+                    <i class="fas fa-link"></i> Try Import
+                </button>
+            </div>
+        </div>
+    `;
+    const style = document.createElement('style');
+    style.textContent = `
+        .yahoo-import-modal { position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.8); display: flex; justify-content: center; align-items: center; z-index: 1000; backdrop-filter: blur(5px); }
+        .yahoo-import-modal .modal-content { background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%); padding: 0; border-radius: 20px; border: 2px solid #6001d2; max-width: 450px; width: 90%; box-shadow: 0 20px 40px rgba(0,0,0,0.5); overflow: hidden; }
+        .yahoo-import-modal .modal-header { padding: 30px 30px 20px; text-align: center; border-bottom: 1px solid rgba(96,1,210,0.2); }
+        .yahoo-import-modal .modal-header h3 { color: #6001d2; margin-bottom: 10px; font-size: 1.5rem; display: flex; align-items: center; justify-content: center; gap: 10px; }
+        .yahoo-import-modal .modal-header p { color: #b0b0b0; font-size: 1rem; line-height: 1.5; }
+        .yahoo-import-modal .modal-body { padding: 30px; }
+        .yahoo-import-modal .input-group { display: flex; flex-direction: column; gap: 15px; }
+        .yahoo-import-modal .input-group label { color: #6001d2; font-weight: 600; font-size: 1rem; }
+        .yahoo-import-modal .input-group input { background: #0f0f1a; border: 2px solid #6001d2; color: white; padding: 15px 20px; border-radius: 10px; font-size: 1rem; }
+        .yahoo-import-modal .input-help { display: flex; align-items: center; gap: 8px; color: #b0b0b0; font-size: 0.9rem; }
+        .yahoo-import-modal .modal-footer { padding: 20px 30px 30px; display: flex; gap: 15px; justify-content: flex-end; }
+        .yahoo-import-modal .btn-cancel { padding: 12px 24px; background: #2a2a4a; color: #b0b0b0; border: 1px solid #4a4a6a; border-radius: 8px; cursor: pointer; }
+        .yahoo-import-modal .btn-connect { padding: 12px 24px; background: linear-gradient(135deg, #6001d2 0%, #4a00a8 100%); color: #fff; border: none; border-radius: 8px; font-weight: 600; cursor: pointer; display: flex; align-items: center; gap: 8px; }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    const leagueKeyInput = modal.querySelector('#yahooLeagueKey');
+    leagueKeyInput.focus();
+    const connectBtn = modal.querySelector('#connectYahoo');
+    const cancelBtn = modal.querySelector('.btn-cancel');
+    connectBtn.addEventListener('click', async () => {
+        const key = leagueKeyInput.value.trim();
+        if (!key) {
+            showNotification('Please enter your Yahoo League ID or league key.', 'warning');
+            return;
+        }
+        connectBtn.disabled = true;
+        connectBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Checking...';
+        try {
+            await apiController.connectYahooByLeagueId(key);
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        } catch (err) {
+            connectBtn.disabled = false;
+            connectBtn.innerHTML = '<i class="fas fa-link"></i> Try Import';
+            showNotification(err.message || 'Yahoo import failed.', 'warning');
+        }
+    });
+    cancelBtn.addEventListener('click', () => { document.body.removeChild(modal); document.head.removeChild(style); });
+    modal.addEventListener('click', (e) => { if (e.target === modal) { document.body.removeChild(modal); document.head.removeChild(style); } });
+    leagueKeyInput.addEventListener('keypress', (e) => { if (e.key === 'Enter') connectBtn.click(); });
 }
 
 function showProviderConnection(provider) {
@@ -352,19 +535,94 @@ function showProviderConnection(provider) {
 }
 
 function updateLeagueSettings() {
+    const benchEl = document.getElementById('benchSpots');
+    const flexEl = document.getElementById('flexSpots');
+    const benchVal = benchEl ? parseInt(benchEl.value, 10) : 6;
+    const flexVal = flexEl ? parseInt(flexEl.value, 10) : 1;
+    const benchSpotsNum = isNaN(benchVal) || benchVal < 0 ? 6 : Math.min(10, Math.max(0, benchVal));
+    const flexSpotsNum = isNaN(flexVal) || flexVal < 0 ? 1 : Math.min(4, Math.max(0, flexVal));
+    if (benchEl && benchEl.value !== String(benchSpotsNum)) benchEl.value = benchSpotsNum;
+    if (flexEl && flexEl.value !== String(flexSpotsNum)) flexEl.value = flexSpotsNum;
     const settings = {
         scoringFormat: document.getElementById('scoringFormat').value,
         leagueType: document.getElementById('leagueType').value,
-        superflex: document.getElementById('superflex').checked
+        superflex: document.getElementById('superflex').checked,
+        benchSpots: benchSpotsNum,
+        flexSpots: flexSpotsNum
     };
-    
-    console.log('League settings updated:', settings);
-    
-    // Here you would typically save settings to localStorage or send to server
     localStorage.setItem('leagueSettings', JSON.stringify(settings));
-    
-    // Show a subtle notification
     showNotification('League settings saved!', 'success');
+    if (window.apiController && typeof window.apiController.refreshBenchSlots === 'function') {
+        window.apiController.refreshBenchSlots();
+    }
+}
+
+// Analyze Team button
+function setupAnalyzeTeam() {
+    const btn = document.querySelector('.analyze-team-btn');
+    if (btn) btn.addEventListener('click', analyzeTeam);
+}
+
+// Footer contact modal
+function setupFooterContact() {
+    const contactBtn = document.getElementById('footerContactBtn');
+    if (!contactBtn) return;
+    contactBtn.addEventListener('click', showContactModal);
+}
+
+function showContactModal() {
+    const overlay = document.createElement('div');
+    overlay.className = 'contact-modal-overlay';
+    overlay.setAttribute('role', 'dialog');
+    overlay.setAttribute('aria-labelledby', 'contact-modal-title');
+    overlay.innerHTML = `
+        <div class="contact-modal">
+            <div class="contact-modal-header">
+                <h3 id="contact-modal-title"><i class="fas fa-envelope"></i> Contact Us</h3>
+                <p style="color:#b0b0b0;font-size:0.9rem;margin:0;">Send us a message and we'll get back to you.</p>
+            </div>
+            <form class="contact-form" id="contactForm">
+                <div class="contact-modal-body">
+                    <div class="form-group">
+                        <label for="contactName">Name</label>
+                        <input type="text" id="contactName" name="name" placeholder="Your name" required autocomplete="name">
+                    </div>
+                    <div class="form-group">
+                        <label for="contactEmail">Email address</label>
+                        <input type="email" id="contactEmail" name="email" placeholder="you@example.com" required autocomplete="email">
+                    </div>
+                    <div class="form-group">
+                        <label for="contactMessage">Message</label>
+                        <textarea id="contactMessage" name="message" placeholder="Your message..." required></textarea>
+                    </div>
+                </div>
+                <div class="contact-modal-footer">
+                    <button type="button" class="btn-cancel">Cancel</button>
+                    <button type="submit" class="btn-submit"><i class="fas fa-paper-plane"></i> Send</button>
+                </div>
+            </form>
+        </div>
+    `;
+    document.body.appendChild(overlay);
+
+    const closeModal = () => {
+        document.body.removeChild(overlay);
+    };
+
+    overlay.querySelector('.btn-cancel').addEventListener('click', closeModal);
+    overlay.addEventListener('click', (e) => { if (e.target === overlay) closeModal(); });
+    overlay.querySelector('#contactForm').addEventListener('submit', (e) => {
+        e.preventDefault();
+        const name = overlay.querySelector('#contactName').value.trim();
+        const email = overlay.querySelector('#contactEmail').value.trim();
+        const message = overlay.querySelector('#contactMessage').value.trim();
+        if (!name || !email || !message) {
+            showNotification('Please fill in name, email, and message.', 'warning');
+            return;
+        }
+        closeModal();
+        showNotification('Thank you! Your message has been received. We\'ll get back to you soon.', 'success');
+    });
 }
 
 // Trade Analyzer Functionality
@@ -372,12 +630,24 @@ function setupTradeAnalyzer() {
     const analyzeBtn = document.querySelector('.analyze-btn');
     if (analyzeBtn) analyzeBtn.addEventListener('click', analyzeTrade);
 
-    // Wire up Add Player buttons for trade analyzer
+    // Wire up Add Player entry points for trade analyzer
+    // Legacy support: buttons (if present)
     const addButtons = document.querySelectorAll('.add-trade-player-btn');
     addButtons.forEach(btn => {
         btn.addEventListener('click', () => {
             const side = btn.getAttribute('data-side') || 'giving';
             showGlobalAddPlayerModal({ mode: 'trade', side });
+        });
+    });
+
+    // Current UI: clickable cards inside Trade Analyzer section
+    const tradeAddCards = document.querySelectorAll('.trade-analyzer .add-trade-card');
+    tradeAddCards.forEach(card => {
+        card.addEventListener('click', () => {
+            const side = card.getAttribute('data-side') || 'giving';
+            if (typeof showGlobalAddPlayerModal === 'function') {
+                showGlobalAddPlayerModal({ mode: 'trade', side });
+            }
         });
     });
 }
@@ -442,6 +712,7 @@ function showGlobalAddPlayerModal(options) {
         .add-trade-player-modal .result-item { display: flex; align-items: center; gap: 12px; padding: 10px; background: rgba(74,158,255,0.08); border: 1px solid rgba(74,158,255,0.2); border-radius: 10px; cursor: pointer; transition: transform 0.15s ease, background 0.15s ease; }
         .add-trade-player-modal .result-item:hover { background: rgba(74,158,255,0.16); transform: translateY(-1px); }
         .add-trade-player-modal .result-item .avatar { width: 36px; height: 36px; border-radius: 50%; overflow: hidden; border: 2px solid #4a9eff; flex-shrink: 0; }
+        .add-trade-player-modal .result-item .avatar img { width: 100%; height: 100%; object-fit: cover; display: block; }
         .add-trade-player-modal .result-item .meta { display: flex; flex-direction: column; }
         .add-trade-player-modal .result-item .meta .name { color: #fff; font-weight: 600; font-size: 0.95rem; }
         .add-trade-player-modal .result-item .meta .sub { color: #b0b0b0; font-size: 0.85rem; }
@@ -479,7 +750,21 @@ function showGlobalAddPlayerModal(options) {
             const matches = await universalPlayerSearch(query);
             currentResults = matches;
             selectedIndex = matches.length ? 0 : -1;
-            renderTradeSearchResults(matches, side, results, closeModal, () => selectedIndex);
+            const useClickCallback = mode === 'lineup';
+            renderTradeSearchResults(
+                matches,
+                side,
+                results,
+                closeModal,
+                () => selectedIndex,
+                useClickCallback
+                    ? (idx) => {
+                          selectedIndex = idx;
+                          updateAddButtonState();
+                          addSelected();
+                      }
+                    : null
+            );
             updateAddButtonState();
         }, 180);
     });
@@ -514,54 +799,148 @@ function showGlobalAddPlayerModal(options) {
         const m = currentResults[selectedIndex];
         const rating = (Math.random() * 15 + 80).toFixed(1);
         if (mode === 'trade') {
-            addTradePlayer(side, { name: m.full_name, position: m.position, rating });
+            const tradeAdded = addTradePlayer(side, { name: m.full_name, position: m.position, rating, id: m.id, team: m.team });
+            if (tradeAdded) closeModal();
         } else {
-            if (window.apiController && typeof apiController.addPlayerToLineup === 'function') {
-                apiController.addPlayerToLineup(lineupPosition || (m.position || 'FLEX'), {
+            const slotPosition = lineupPosition || m.position || 'FLEX';
+            const playerPos = (m.position || '').trim();
+            if (slotPosition !== 'BENCH' && !isPlayerPositionAllowedForSlot(playerPos, slotPosition)) {
+                showNotification(
+                    playerPos
+                        ? `${m.full_name} (${playerPos}) cannot be added to ${slotPosition}. Use the correct position slot or FLEX.`
+                        : `Select a player with a valid position for ${slotPosition}.`,
+                    'warning'
+                );
+                return;
+            }
+            const controller = apiController || window.apiController;
+            if (controller && typeof controller.addPlayerToLineup === 'function') {
+                const added = controller.addPlayerToLineup(slotPosition, {
                     full_name: m.full_name,
-                    position: m.position || lineupPosition || 'FLEX',
+                    position: m.position || slotPosition,
                     team: m.team || '',
                     id: m.id,
-                    image: getEspnHeadshotUrl(m.id)
+                    image: getPlayerOrTeamImageUrl(m)
                 });
+                if (added === true) closeModal();
+                else if (added === 'duplicate') showNotification(m.full_name + ' is already in your lineup or bench.', 'warning');
+                else showNotification('Could not add player to ' + slotPosition + '. That slot may already be filled.', 'warning');
+            } else {
+                showNotification('Unable to add player to lineup. Please try again.', 'warning');
             }
         }
-        closeModal();
     }
 }
 
-// ESPN NFL players dataset (cached once)
+// ESPN NFL players dataset (cached once) – built from team rosters so position + team are always present
 let _espnPlayersCache = null;
 async function loadEspnPlayers() {
     if (_espnPlayersCache) return _espnPlayersCache;
-    const url = 'https://sports.core.api.espn.com/v3/sports/football/nfl/athletes?limit=20000&active=true';
-    const res = await fetch(url, { method: 'GET' });
-    if (!res.ok) throw new Error(`ESPN players fetch failed: ${res.status}`);
-    const data = await res.json();
-    const items = Array.isArray(data.items) ? data.items : [];
-    _espnPlayersCache = items.map(it => ({
-        id: it.id,
-        full_name: it.fullName || it.displayName || it.shortName || '',
-        position: (it.position && (it.position.abbreviation || it.position.name)) || '',
-        team: (it.team && (it.team.abbreviation || it.team.name)) || ''
-    })).filter(p => p.full_name);
+    const teamsRes = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams');
+    if (!teamsRes.ok) throw new Error(`ESPN teams fetch failed: ${teamsRes.status}`);
+    const teamsData = await teamsRes.json();
+    const teams = [];
+    try {
+        const leagues = teamsData.sports?.[0]?.leagues || [];
+        for (const league of leagues) {
+            const list = league.teams || [];
+            for (const t of list) {
+                const team = t.team || t;
+                if (team.id && team.abbreviation) teams.push({ id: team.id, abbreviation: team.abbreviation });
+            }
+        }
+    } catch (e) {
+        console.warn('ESPN teams parse error', e);
+    }
+    const allPlayers = [];
+    for (const team of teams) {
+        try {
+            const rosterRes = await fetch(`https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams/${team.id}/roster`);
+            if (!rosterRes.ok) continue;
+            const roster = await rosterRes.json();
+            const groups = roster.athletes || [];
+            for (const group of groups) {
+                const items = group.items || [];
+                for (const it of items) {
+                    const pos = it.position;
+                    const positionStr = (pos && (pos.abbreviation || pos.displayName || pos.name)) || '';
+                    const name = it.fullName || it.displayName || it.shortName || it.name || '';
+                    if (!name || !it.id) continue;
+                    allPlayers.push({
+                        id: String(it.id),
+                        full_name: name,
+                        position: positionStr,
+                        team: team.abbreviation
+                    });
+                }
+            }
+        } catch (e) {
+            console.warn(`ESPN roster fetch failed for team ${team.id}`, e);
+        }
+    }
+    _espnPlayersCache = allPlayers;
     return _espnPlayersCache;
 }
 
+// NFL teams as "team defense" options (cached)
+let _nflTeamDefensesCache = null;
+async function loadNflTeamDefenses() {
+    if (_nflTeamDefensesCache) return _nflTeamDefensesCache;
+    try {
+        const res = await fetch('https://site.api.espn.com/apis/site/v2/sports/football/nfl/teams');
+        if (!res.ok) return [];
+        const data = await res.json();
+        const teams = [];
+        const leagues = data.sports?.[0]?.leagues || [];
+        for (const league of leagues) {
+            const list = league.teams || [];
+            for (const t of list) {
+                const team = t.team || t;
+                if (team.id && team.abbreviation) {
+                    teams.push({
+                        id: 'T' + team.id,
+                        full_name: team.displayName || team.name || team.abbreviation + ' Defense',
+                        position: 'DEF',
+                        team: team.abbreviation,
+                        isTeamDefense: true
+                    });
+                }
+            }
+        }
+        _nflTeamDefensesCache = teams;
+        return _nflTeamDefensesCache;
+    } catch (e) {
+        console.warn('Failed to load NFL teams for defense', e);
+        return [];
+    }
+}
+
 async function universalPlayerSearch(query) {
-    const q = (query || '').toLowerCase();
+    const q = (query || '').toLowerCase().trim();
     if (!q) return [];
     try {
-        const list = await loadEspnPlayers();
+        const [playerList, teamDefenses] = await Promise.all([
+            loadEspnPlayers(),
+            loadNflTeamDefenses()
+        ]);
         const out = [];
-        for (let i = 0; i < list.length; i++) {
-            const p = list[i];
-            if (p.full_name.toLowerCase().includes(q)) {
+        for (let i = 0; i < playerList.length; i++) {
+            const p = playerList[i];
+            if (p.full_name && p.full_name.toLowerCase().includes(q)) {
                 out.push(p);
+                if (out.length >= 25) break;
+            }
+        }
+        // Add matching team defenses (e.g. "Ravens" -> Baltimore Ravens DEF)
+        for (const t of teamDefenses) {
+            const name = (t.full_name || '').toLowerCase();
+            const abbr = (t.team || '').toLowerCase();
+            if (name.includes(q) || abbr === q || name.startsWith(q) || name.split(/\s+/).some(part => part.startsWith(q))) {
+                out.push(t);
                 if (out.length >= 30) break;
             }
         }
-        return out;
+        return out.slice(0, 30);
     } catch (e) {
         console.error('universalPlayerSearch error:', e);
         return [];
@@ -569,26 +948,86 @@ async function universalPlayerSearch(query) {
 }
 
 function getEspnHeadshotUrl(id) {
-    // ESPN headshot CDN pattern via s3/img handles; use a proxy-less simple path when available
-    // Fallback to Sleeper static if not available
-    const espn = `https://a.espncdn.com/i/headshots/nfl/players/full/${id}.png`;
-    return espn;
+    if (!id) return '';
+    return `https://a.espncdn.com/i/headshots/nfl/players/full/${id}.png`;
 }
 
-function renderTradeSearchResults(matches, side, resultsEl, closeModal, getSelectedIndex) {
+function getPlayerOrTeamImageUrl(item) {
+    if (!item) return '';
+    if (item.isTeamDefense && item.team)
+        return `https://a.espncdn.com/i/teamlogos/nfl/500/${item.team.toLowerCase()}.png`;
+    if (item.id && String(item.id).startsWith('T') && item.team)
+        return `https://a.espncdn.com/i/teamlogos/nfl/500/${item.team.toLowerCase()}.png`;
+    return getEspnHeadshotUrl(item.id);
+}
+
+function getPlayerInitials(name) {
+    if (!name || typeof name !== 'string') return '?';
+    const parts = name.trim().split(/\s+/).filter(Boolean);
+    if (parts.length === 0) return '?';
+    if (parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+    return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase().slice(0, 3);
+}
+
+function getPlayerPlaceholderUrl(name, size = 128) {
+    const initials = getPlayerInitials(name);
+    return `https://ui-avatars.com/api/?name=${encodeURIComponent(initials)}&size=${size}&background=1a1a2e&color=4a9eff`;
+}
+
+// Position validation: which player positions are allowed in each lineup slot (FLEX = all skill positions)
+function getAllowedPositionsForSlot(slotPosition) {
+    const slot = (slotPosition || '').toUpperCase();
+    const map = {
+        QB: ['QB'],
+        RB: ['RB'],
+        WR: ['WR'],
+        TE: ['TE'],
+        K: ['K', 'PK'],
+        DEF: ['DEF', 'DST', 'D', 'DE', 'DT', 'NT', 'LB', 'S', 'CB'],
+        FLEX: ['QB', 'RB', 'WR', 'TE', 'K']
+    };
+    return map[slot] || [];
+}
+
+function isPlayerPositionAllowedForSlot(playerPosition, slotPosition) {
+    if (!slotPosition) return true;
+    const slot = (slotPosition || '').toUpperCase();
+    if (slot === 'FLEX') return true; // FLEX accepts all positions
+    const allowed = getAllowedPositionsForSlot(slot);
+    const pos = (playerPosition || '').toUpperCase();
+    if (!pos) return false;
+    return allowed.some(a => pos === a || pos.startsWith(a) || a.startsWith(pos));
+}
+
+// Preload player headshots so they're in browser cache when displayed (search + trade list)
+function preloadPlayerImages(players) {
+    if (!Array.isArray(players) || players.length === 0) return;
+    players.slice(0, 30).forEach(p => {
+        if (p.isTeamDefense || (p.id && String(p.id).startsWith('T'))) return;
+        const id = p.id || p.player_id;
+        if (!id) return;
+        const img = new Image();
+        img.src = getEspnHeadshotUrl(id);
+    });
+}
+
+function renderTradeSearchResults(matches, side, resultsEl, closeModal, getSelectedIndex, onItemChosen) {
     if (!Array.isArray(matches)) { resultsEl.innerHTML = ''; return; }
-    resultsEl.innerHTML = matches.map(m => {
-        const avatar = getEspnHeadshotUrl(m.id);
+    const placeholderFallback = matches.map(m => getPlayerPlaceholderUrl(m.full_name, 36));
+    resultsEl.innerHTML = matches.map((m, i) => {
+        const avatar = getPlayerOrTeamImageUrl(m);
+        const fallback = placeholderFallback[i] || getPlayerPlaceholderUrl(m.full_name, 36);
         return `
-            <div class="result-item" data-id="${m.id}" data-name="${m.full_name}" data-pos="${m.position || ''}" data-team="${m.team || ''}">
-                <div class="avatar"><img src="${avatar}" alt="${m.full_name}" onerror="this.onerror=null;this.src='https://via.placeholder.com/36x36/1a1a2e/ffffff?text=${(m.position||'').slice(0,2)}';"/></div>
+            <div class="result-item" data-id="${m.id}" data-name="${m.full_name}" data-pos="${m.position || ''}" data-team="${m.team || ''}" data-team-defense="${m.isTeamDefense ? '1' : ''}">
+                <div class="avatar"><img src="${avatar}" alt="${m.full_name}" onerror="this.onerror=null;this.src='${fallback}';"/></div>
                 <div class="meta">
                     <span class="name">${m.full_name}</span>
-                    <span class="sub">${m.position || '-'} ${m.team ? ('- ' + m.team) : ''}</span>
+                    <span class="sub">${m.position || '-'}${m.team ? ' • ' + m.team : ''}</span>
                 </div>
             </div>
         `;
     }).join('');
+    preloadPlayerImages(matches);
 
     const items = resultsEl.querySelectorAll('.result-item');
     const applyHighlight = () => {
@@ -602,19 +1041,24 @@ function renderTradeSearchResults(matches, side, resultsEl, closeModal, getSelec
 
     items.forEach((item, idx) => {
         item.addEventListener('click', () => {
-            const name = item.getAttribute('data-name');
-            const position = item.getAttribute('data-pos');
-            // Simple placeholder rating; could be replaced with real metric
-            const rating = (Math.random() * 15 + 80).toFixed(1);
-            addTradePlayer(side, { name, position, rating });
-            closeModal();
+            if (typeof onItemChosen === 'function') {
+                onItemChosen(idx);
+            } else {
+                const name = item.getAttribute('data-name');
+                const position = item.getAttribute('data-pos');
+                const id = item.getAttribute('data-id');
+                const team = item.getAttribute('data-team');
+                const rating = (Math.random() * 15 + 80).toFixed(1);
+                const added = addTradePlayer(side, { name, position, rating, id: id || undefined, team: team || undefined });
+                if (added) closeModal();
+            }
         });
         item.addEventListener('mouseenter', () => {
             items.forEach(it => it.classList.remove('selected'));
             item.classList.add('selected');
         });
     });
-}
+} 
 
 function ensureTradeAnalysisContainer() {
     let tradeAnalysis = document.querySelector('.trade-analysis-container');
@@ -669,14 +1113,43 @@ function addTradePlayer(side, data) {
     ensureTradeAnalysisContainer();
     const targetListId = side === 'receiving' ? 'receivingList' : 'givingList';
     const target = document.getElementById(targetListId);
-    if (!target) return;
+    if (!target) return false;
+
+    // Prevent duplicate: same player already in this side's list
+    const newId = data.id != null ? String(data.id) : '';
+    const newKey = (data.name || '') + '|' + (data.team || '');
+    const existing = target.querySelectorAll('.trade-player-item');
+    for (const item of existing) {
+        const existingId = item.getAttribute('data-player-id') || '';
+        const existingName = item.getAttribute('data-player-name') || '';
+        const existingTeam = item.getAttribute('data-player-team') || '';
+        const existingKey = existingName + '|' + existingTeam;
+        if (newId && existingId && newId === existingId) {
+            showNotification((data.name || 'Player') + ' is already in this side of the trade.', 'warning');
+            return false;
+        }
+        if (newKey && existingKey && newKey === existingKey) {
+            showNotification((data.name || 'Player') + ' is already in this side of the trade.', 'warning');
+            return false;
+        }
+    }
+
+    const avatarSrc = getPlayerOrTeamImageUrl({ id: data.id, team: data.team, full_name: data.name, isTeamDefense: data.id && String(data.id).startsWith('T') }) || getPlayerPlaceholderUrl(data.name, 48);
+    const placeholderSrc = getPlayerPlaceholderUrl(data.name, 48);
+    const safeName = (data.name || '').replace(/"/g, '&quot;');
 
     const el = document.createElement('div');
     el.className = 'trade-player-item';
+    if (data.id != null) el.setAttribute('data-player-id', String(data.id));
+    el.setAttribute('data-player-name', data.name || '');
+    el.setAttribute('data-player-team', data.team || '');
     el.innerHTML = `
+        <div class="trade-player-avatar">
+            <img src="${avatarSrc}" alt="${safeName}" onerror="this.onerror=null;this.src='${placeholderSrc}';"/>
+        </div>
         <div class="player-info">
             <strong>${data.name}</strong>
-            <span>${data.position || '-'}</span>
+            <span>${data.position || '-'}${data.team ? ' • ' + data.team : ''}</span>
         </div>
         <div class="player-rating">${data.rating}</div>
         <button class="remove-btn">×</button>
@@ -685,12 +1158,14 @@ function addTradePlayer(side, data) {
     // Minimal styles if not already present
     const itemStyle = document.createElement('style');
     itemStyle.textContent = `
-        .trade-player-item { display: flex; align-items: center; justify-content: space-between; padding: 8px 12px; background: rgba(74,158,255,0.1); border-radius: 6px; margin-bottom: 8px; border: 1px solid rgba(74,158,255,0.2); }
-        .trade-player-item .player-info { flex: 1; }
+        .trade-player-item { display: flex; align-items: center; gap: 10px; padding: 8px 12px; background: rgba(74,158,255,0.1); border-radius: 6px; margin-bottom: 8px; border: 1px solid rgba(74,158,255,0.2); }
+        .trade-player-item .trade-player-avatar { width: 40px; height: 40px; border-radius: 50%; overflow: hidden; flex-shrink: 0; border: 2px solid rgba(74,158,255,0.4); }
+        .trade-player-item .trade-player-avatar img { width: 100%; height: 100%; object-fit: cover; }
+        .trade-player-item .player-info { flex: 1; min-width: 0; }
         .trade-player-item .player-info strong { color: #ffffff; display: block; font-size: 0.9rem; }
         .trade-player-item .player-info span { color: #b0b0b0; font-size: 0.8rem; }
-        .trade-player-item .player-rating { background: #4a9eff; color: #1a1a2e; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; margin: 0 10px; }
-        .remove-btn { background: #ff4757; color: white; border: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; }
+        .trade-player-item .player-rating { background: #4a9eff; color: #1a1a2e; padding: 2px 8px; border-radius: 10px; font-size: 0.8rem; font-weight: 600; margin: 0 10px; flex-shrink: 0; }
+        .remove-btn { background: #ff4757; color: white; border: none; width: 20px; height: 20px; border-radius: 50%; cursor: pointer; font-size: 12px; display: flex; align-items: center; justify-content: center; flex-shrink: 0; }
         .remove-btn:hover { background: #ff3742; }
         .add-trade-player-modal .result-item.selected { outline: 2px solid #4a9eff; }
     `;
@@ -699,6 +1174,7 @@ function addTradePlayer(side, data) {
     target.appendChild(el);
     el.querySelector('.remove-btn').addEventListener('click', () => { el.remove(); updateTradeAnalysis(); });
     updateTradeAnalysis();
+    return true;
 }
 
 function setupAddPlayerButtons() {
@@ -933,7 +1409,7 @@ function updateTradeAnalysis() {
                                  fairness === 'Favorable' ? '#4a9eff' : '#ff4757';
 }
 
-function analyzeTrade() {
+async function analyzeTrade() {
     const givingList = document.getElementById('givingList');
     const receivingList = document.getElementById('receivingList');
     
@@ -942,18 +1418,57 @@ function analyzeTrade() {
         return;
     }
     
-    const givingPlayers = givingList.querySelectorAll('.trade-player-item');
-    const receivingPlayers = receivingList.querySelectorAll('.trade-player-item');
+    const givingPlayersEls = givingList.querySelectorAll('.trade-player-item');
+    const receivingPlayersEls = receivingList.querySelectorAll('.trade-player-item');
     
-    if (givingPlayers.length === 0 || receivingPlayers.length === 0) {
+    if (givingPlayersEls.length === 0 || receivingPlayersEls.length === 0) {
         showNotification('Please add players to both sides of the trade', 'warning');
         return;
     }
-    
-    // Perform detailed trade analysis
-    const analysis = performTradeAnalysis(givingPlayers, receivingPlayers);
-    
-    showTradeAnalysisModal(analysis);
+
+    const analyzeBtn = document.querySelector('.analyze-btn');
+    let originalLabel = '';
+    if (analyzeBtn) {
+        originalLabel = analyzeBtn.innerHTML;
+        analyzeBtn.disabled = true;
+        analyzeBtn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
+    }
+
+    try {
+        // Local numeric analysis as a baseline
+        const baseAnalysis = performTradeAnalysis(givingPlayersEls, receivingPlayersEls);
+
+        // Build lightweight payload for AI
+        const giving = Array.from(givingPlayersEls).map(el => ({
+            name: el.querySelector('.player-info strong')?.textContent || '',
+            position: el.querySelector('.player-info span')?.textContent || '',
+            rating: parseFloat(el.querySelector('.player-rating')?.textContent || '0')
+        }));
+        const receiving = Array.from(receivingPlayersEls).map(el => ({
+            name: el.querySelector('.player-info strong')?.textContent || '',
+            position: el.querySelector('.player-info span')?.textContent || '',
+            rating: parseFloat(el.querySelector('.player-rating')?.textContent || '0')
+        }));
+
+        let aiResult = null;
+        if (apiController && typeof apiController.analyzeTradeWithOpenAI === 'function') {
+            try {
+                aiResult = await apiController.analyzeTradeWithOpenAI(giving, receiving);
+            } catch (err) {
+                console.error('AI trade analysis failed, falling back to local analysis only:', err);
+            }
+        }
+
+        showTradeAnalysisModal({
+            ...baseAnalysis,
+            ai: aiResult
+        });
+    } finally {
+        if (analyzeBtn) {
+            analyzeBtn.disabled = false;
+            analyzeBtn.innerHTML = originalLabel || '<i class="fas fa-chart-line"></i> Analyze Trade';
+        }
+    }
 }
 
 function performTradeAnalysis(givingPlayers, receivingPlayers) {
@@ -1003,13 +1518,18 @@ function getTradeRecommendation(netValue) {
 function showTradeAnalysisModal(analysis) {
     const modal = document.createElement('div');
     modal.className = 'analysis-modal';
+    const ai = analysis.ai || null;
+    const fairnessLabel = (ai && ai.fairness) || analysis.fairness;
+    const recommendationText = (ai && ai.summary) || analysis.recommendation;
+    const aiGrade = ai && typeof ai.grade === 'number' ? ai.grade.toFixed(1) : null;
+    const netValueNumeric = parseFloat(analysis.netValue);
     modal.innerHTML = `
         <div class="modal-content">
             <h3>Trade Analysis Results</h3>
             <div class="analysis-results">
                 <div class="result-item">
                     <span class="label">Net Value:</span>
-                    <span class="value ${analysis.netValue > 0 ? 'positive' : 'negative'}">${analysis.netValue > 0 ? '+' : ''}${analysis.netValue}</span>
+                    <span class="value ${netValueNumeric > 0 ? 'positive' : 'negative'}">${netValueNumeric > 0 ? '+' : ''}${analysis.netValue}</span>
                 </div>
                 <div class="result-item">
                     <span class="label">Your Average:</span>
@@ -1021,12 +1541,17 @@ function showTradeAnalysisModal(analysis) {
                 </div>
                 <div class="result-item">
                     <span class="label">Fairness:</span>
-                    <span class="value ${analysis.fairness.toLowerCase()}">${analysis.fairness}</span>
+                    <span class="value ${fairnessLabel.toLowerCase()}">${fairnessLabel}</span>
                 </div>
+                ${aiGrade !== null ? `
+                <div class="result-item">
+                    <span class="label">AI Grade (0–100):</span>
+                    <span class="value">${aiGrade}</span>
+                </div>` : ''}
             </div>
             <div class="recommendation">
-                <h4>Recommendation:</h4>
-                <p>${analysis.recommendation}</p>
+                <h4>${ai ? 'AI Recommendation:' : 'Recommendation:'}</h4>
+                <p>${recommendationText}</p>
             </div>
             <button class="close-modal">Close</button>
         </div>
@@ -1142,9 +1667,115 @@ function showTradeAnalysisModal(analysis) {
     });
 }
 
+function getLineupAndBenchPlayers() {
+    const lineupCards = document.querySelectorAll('.lineup-section .player-card:not(.placeholder)');
+    const benchCards = document.querySelectorAll('.bench-section .player-card');
+    const toPlayer = (card) => {
+        const name = card.querySelector('.player-info h5')?.textContent?.trim() || '';
+        const posLine = card.querySelector('.player-info p.position')?.textContent?.trim() || '';
+        const rating = parseFloat(card.querySelector('.player-info .rating')?.textContent || '0') || 0;
+        const slot = card.getAttribute('data-slot-position') || '';
+        const parts = posLine.split(/\s*-\s*/);
+        const position = parts[0]?.trim() || '';
+        const team = parts[1]?.trim() || '';
+        return { name, position, team, rating, slot };
+    };
+    const lineup = Array.from(lineupCards).map(toPlayer);
+    const bench = Array.from(benchCards).map(toPlayer);
+    return { lineup, bench };
+}
+
+async function analyzeTeam() {
+    const { lineup, bench } = getLineupAndBenchPlayers();
+    const total = lineup.length + bench.length;
+    if (total === 0) {
+        showNotification('Add players to your lineup and bench to analyze your team.', 'warning');
+        return;
+    }
+
+    const btn = document.querySelector('.analyze-team-btn');
+    const originalLabel = btn ? btn.innerHTML : '';
+    if (btn) {
+        btn.disabled = true;
+        btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Analyzing...';
+    }
+
+    try {
+        let result = null;
+        if (apiController && typeof apiController.analyzeTeamWithOpenAI === 'function') {
+            try {
+                result = await apiController.analyzeTeamWithOpenAI(lineup, bench);
+            } catch (err) {
+                console.error('AI team analysis failed:', err);
+                showNotification(err.message || 'AI analysis failed. Check your API key.', 'warning');
+            }
+        }
+        if (!result) {
+            showNotification('OpenAI API key is required for team analysis.', 'warning');
+            return;
+        }
+        showTeamAnalysisModal(result);
+    } finally {
+        if (btn) {
+            btn.disabled = false;
+            btn.innerHTML = originalLabel || '<i class="fas fa-chart-pie"></i> Analyze Team';
+        }
+    }
+}
+
+function showTeamAnalysisModal(result) {
+    const modal = document.createElement('div');
+    modal.className = 'analysis-modal team-analysis-modal';
+    const section = (title, text) =>
+        text
+            ? `
+        <div class="team-analysis-section">
+            <h4>${title}</h4>
+            <p>${text.replace(/\n/g, '<br>')}</p>
+        </div>`
+            : '';
+    modal.innerHTML = `
+        <div class="modal-content">
+            <h3><i class="fas fa-chart-pie"></i> Team Analysis</h3>
+            <div class="team-analysis-body">
+                ${section('Where your team is strong', result.strengths)}
+                ${section('Where you need help', result.needsHelp)}
+                ${section('Trade targets', result.tradeTargets)}
+                ${section('Players to consider trading away', result.tradeAway)}
+                ${section('Drop candidates', result.dropCandidates)}
+            </div>
+            <button class="close-modal">Close</button>
+        </div>
+    `;
+    const style = document.createElement('style');
+    style.textContent = `
+        .team-analysis-modal .modal-content { max-width: 560px; text-align: left; }
+        .team-analysis-modal h3 { color: #4a9eff; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
+        .team-analysis-body { max-height: 60vh; overflow-y: auto; margin-bottom: 20px; }
+        .team-analysis-section { margin-bottom: 18px; padding: 12px 16px; background: rgba(74, 158, 255, 0.08); border-radius: 10px; border-left: 4px solid #4a9eff; }
+        .team-analysis-section h4 { color: #4a9eff; margin: 0 0 8px 0; font-size: 1rem; }
+        .team-analysis-section p { color: #b0b0b0; margin: 0; line-height: 1.5; font-size: 0.95rem; }
+        .team-analysis-modal .close-modal { width: 100%; }
+    `;
+    document.head.appendChild(style);
+    document.body.appendChild(modal);
+    modal.querySelector('.close-modal').addEventListener('click', () => {
+        document.body.removeChild(modal);
+        document.head.removeChild(style);
+    });
+    modal.addEventListener('click', (e) => {
+        if (e.target === modal) {
+            document.body.removeChild(modal);
+            document.head.removeChild(style);
+        }
+    });
+}
+
 // Player Interactions
 function setupPlayerInteractions() {
-    const playerCards = document.querySelectorAll('.player-card');
+    // Limit interactions to the main team display so trade analyzer
+    // placeholders use their own click behavior.
+    const playerCards = document.querySelectorAll('.team-display .player-card');
     
     playerCards.forEach(card => {
         card.addEventListener('click', function() {
@@ -1162,6 +1793,34 @@ function setupPlayerInteractions() {
 function showPlayerDetails(playerName) {
     // Placeholder for player details modal
     showNotification(`Viewing details for ${playerName}`, 'info');
+}
+
+function updateTeamOverallRating() {
+    try {
+        const overallStat = document.querySelector('.team-stats .stat strong');
+        if (!overallStat) return;
+
+        const ratingEls = document.querySelectorAll('.lineup-section .player-card .rating');
+        let total = 0;
+        let count = 0;
+        ratingEls.forEach(el => {
+            const val = parseFloat(el.textContent);
+            if (!isNaN(val)) {
+                total += val;
+                count++;
+            }
+        });
+
+        if (count === 0) {
+            overallStat.textContent = '--';
+            return;
+        }
+
+        const avg = total / count;
+        overallStat.textContent = avg.toFixed(1);
+    } catch (e) {
+        console.error('Failed to update team overall rating:', e);
+    }
 }
 
 // Utility Functions
