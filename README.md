@@ -18,4 +18,4 @@ So that **users never see or enter an API key**, run the app with the included b
    Open **http://localhost:3000** (not as a file). **Analyze Trade** and **Analyze Team** use the key from `.env`; no user prompt. Optionally set `OPENAI_MODEL=gpt-4o` (or another model ID) in `.env` to use a different model.
 
 3. **Deploying:**  
-   Deploy `server.js` and your static files to your host. Set `OPENAI_API_KEY` in the host’s environment (e.g. Railway, Heroku, Render env vars). If the frontend is on a different domain, set `window.APP_API_URL = 'https://your-api-domain.com'` before loading the app so the frontend calls your API URL.
+   Deploy `server.js` and your static files to your host. Set `OPENAI_API_KEY` in the host’s environment (e.g. Railway, Heroku, Render env vars). If the frontend is on a different domain, set `window.APP_API_URL = 'https://your-api-domain.com'` before loading the app so the frontend calls your API URL...
