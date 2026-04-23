@@ -3,8 +3,9 @@
  * Users never see or enter a key; all AI requests go through this proxy.
  *
  * 1. Copy .env.example to .env and set OPENAI_API_KEY=sk-your-key
- * 2. Run: npm install && node server.js
+ * 2. Run: npm install && node server.js  (or: npx vercel dev)
  * 3. Open http://localhost:3000 (or your deployed URL)
+ * Deploy: connect this repo to Vercel. Static files live in public/; the API is this Express app.
  */
 
 require('dotenv').config();
@@ -18,7 +19,8 @@ const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 const OPENAI_MODEL = process.env.OPENAI_MODEL || 'gpt-4o-mini';
 
 app.use(express.json());
-app.use(express.static(path.join(__dirname)));
+// Local/dev: Vercel production serves public/ via the CDN; express.static is ignored there (see Vercel Express docs)
+app.use(express.static(path.join(__dirname, 'public')));
 
 if (!OPENAI_API_KEY) {
     console.warn('Warning: OPENAI_API_KEY is not set in .env. Analyze Trade and Analyze Team will return 503.');
@@ -142,7 +144,11 @@ app.post('/api/analyze-team', async (req, res) => {
     }
 });
 
-app.listen(PORT, () => {
-    console.log(`Server running at http://localhost:${PORT}`);
-    if (!OPENAI_API_KEY) console.warn('Set OPENAI_API_KEY in .env for AI features.');
-});
+module.exports = app;
+
+if (require.main === module) {
+    app.listen(PORT, () => {
+        console.log(`Server running at http://localhost:${PORT}`);
+        if (!OPENAI_API_KEY) console.warn('Set OPENAI_API_KEY in .env for AI features.');
+    });
+}
