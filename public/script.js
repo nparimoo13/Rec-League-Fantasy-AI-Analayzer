@@ -11,12 +11,202 @@ document.addEventListener('DOMContentLoaded', function() {
 });
 
 function initializeApp() {
+    setupScoringPill();
+    setupRatingTooltip();
     setupLeagueSettings();
     setupTradeAnalyzer();
     setupAnalyzeTeam();
     setupFooterContact();
     setupPlayerInteractions();
     initializeTeamDisplay();
+}
+
+// Hover/focus tooltip for any element matching `.player-card .rating` or
+// `.trade-player-item .player-rating`. Reads `data-drivers`, `data-confidence`,
+// `data-as-of`, `data-scoring`, etc. populated by `applyRatingToElement`.
+function setupRatingTooltip() {
+    let tip = null;
+    let activeEl = null;
+
+    function ensureTip() {
+        if (tip) return tip;
+        tip = document.createElement('div');
+        tip.className = 'rating-tooltip';
+        tip.style.display = 'none';
+        document.body.appendChild(tip);
+        return tip;
+    }
+
+    function fmtConfidence(c) {
+        if (c == null || isNaN(c)) return '0%';
+        return `${Math.round(c * 100)}%`;
+    }
+
+    function fmtAsOf(iso) {
+        if (!iso) return '';
+        const d = new Date(iso);
+        if (isNaN(d.getTime())) return '';
+        return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric' });
+    }
+
+    function show(el) {
+        if (!el) return;
+        const rating = el.getAttribute('data-rating') || el.textContent.trim() || '--';
+        const name = el.getAttribute('data-name') || (el.closest('[data-player-name]')?.getAttribute('data-player-name')) || '';
+        const position = el.getAttribute('data-position') || '';
+        const games = el.getAttribute('data-games') || '0';
+        const scoring = el.getAttribute('data-scoring') || '';
+        const asOf = el.getAttribute('data-as-of') || '';
+        const confidence = parseFloat(el.getAttribute('data-confidence') || '0');
+        const band = el.getAttribute('data-confidence-band') || (confidence < 0.6 ? 'low' : 'normal');
+        let drivers = [];
+        try { drivers = JSON.parse(el.getAttribute('data-drivers') || '[]'); } catch (_e) { drivers = []; }
+        if (drivers.length === 0) drivers = el.getAttribute('data-loading') ? ['Loading rating…'] : ['No rating drivers available'];
+
+        const t = ensureTip();
+        t.innerHTML = `
+            <div class="rating-tooltip-header">
+                <span>${name ? escapeHtmlSafe(name) : 'Player rating'}${position ? ` · ${escapeHtmlSafe(position)}` : ''}</span>
+                <span>${escapeHtmlSafe(rating)}</span>
+            </div>
+            <div class="rating-tooltip-meta">
+                Last ${escapeHtmlSafe(games)} game${games === '1' ? '' : 's'}${scoring ? ` · ${escapeHtmlSafe(scoring)}` : ''}${asOf ? ` · as of ${escapeHtmlSafe(fmtAsOf(asOf))}` : ''}
+            </div>
+            <ul>${drivers.map(d => `<li>${escapeHtmlSafe(String(d))}</li>`).join('')}</ul>
+            <div class="rating-tooltip-confidence" title="Confidence ${fmtConfidence(confidence)}">
+                <div class="rating-tooltip-confidence-bar" data-band="${escapeHtmlSafe(band)}" style="width:${Math.max(4, Math.min(100, Math.round(confidence * 100)))}%"></div>
+            </div>
+        `;
+        t.style.display = 'block';
+        activeEl = el;
+        position_tip(el);
+    }
+
+    function position_tip(el) {
+        if (!tip || !el) return;
+        const rect = el.getBoundingClientRect();
+        const tw = tip.offsetWidth;
+        const th = tip.offsetHeight;
+        let left = rect.left + (rect.width / 2) - (tw / 2);
+        let top = rect.top - th - 8;
+        if (top < 8) top = rect.bottom + 8;
+        left = Math.max(8, Math.min(window.innerWidth - tw - 8, left));
+        tip.style.left = `${left}px`;
+        tip.style.top = `${top}px`;
+    }
+
+    function hide() {
+        if (tip) tip.style.display = 'none';
+        activeEl = null;
+    }
+
+    function isRatingChip(el) {
+        if (!el || !el.matches) return false;
+        return el.matches('.player-card .rating, .trade-player-item .player-rating');
+    }
+
+    document.addEventListener('mouseover', (e) => {
+        const target = e.target.closest('.player-card .rating, .trade-player-item .player-rating');
+        if (target) show(target);
+    });
+    document.addEventListener('mouseout', (e) => {
+        if (!isRatingChip(e.target)) return;
+        if (e.relatedTarget && (isRatingChip(e.relatedTarget) || (tip && tip.contains(e.relatedTarget)))) return;
+        hide();
+    });
+    document.addEventListener('focusin', (e) => {
+        if (isRatingChip(e.target)) show(e.target);
+    });
+    document.addEventListener('focusout', () => hide());
+    window.addEventListener('scroll', () => { if (activeEl) position_tip(activeEl); }, true);
+    window.addEventListener('resize', () => { if (activeEl) position_tip(activeEl); });
+}
+
+function escapeHtmlSafe(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+// Persistent top-of-page scoring selector. Two-way bound to #scoringFormat;
+// shows a "(League)" badge when a Sleeper league is connected so users can
+// see at a glance whether the rating math is using their league's rules.
+const SCORING_LABELS = {
+    'full-ppr': 'Full PPR',
+    'half-ppr': 'Half PPR',
+    'no-ppr': 'No PPR'
+};
+
+function getConnectedLeagueId() {
+    const ld = (window.apiController && window.apiController.leagueData) || null;
+    if (!ld) return null;
+    return ld.league_id || ld.leagueId || null;
+}
+
+function currentScoring() {
+    const leagueId = getConnectedLeagueId();
+    if (leagueId) return `league:${leagueId}`;
+    const sel = document.getElementById('scoringPillSelect') || document.getElementById('scoringFormat');
+    const v = sel && sel.value;
+    return v && SCORING_LABELS[v] ? v : 'full-ppr';
+}
+
+function refreshScoringPill() {
+    const pill = document.getElementById('scoringPill');
+    const value = document.getElementById('scoringPillValue');
+    const select = document.getElementById('scoringPillSelect');
+    if (!pill || !value || !select) return;
+
+    const formatSelect = document.getElementById('scoringFormat');
+    const baseFormat = (formatSelect && formatSelect.value) || 'full-ppr';
+    if (select.value !== baseFormat && SCORING_LABELS[baseFormat]) select.value = baseFormat;
+
+    value.textContent = SCORING_LABELS[select.value] || 'Full PPR';
+    if (getConnectedLeagueId()) pill.dataset.source = 'league';
+    else pill.removeAttribute('data-source');
+}
+
+function setupScoringPill() {
+    const pill = document.getElementById('scoringPill');
+    const select = document.getElementById('scoringPillSelect');
+    if (!pill || !select) return;
+    refreshScoringPill();
+
+    if (typeof window !== 'undefined') window.currentScoring = currentScoring;
+
+    const recomputeAllRatings = () => {
+        const ctrl = window.apiController;
+        if (!ctrl || typeof ctrl.fillRatingsForCards !== 'function') return;
+        ctrl.invalidateRatingCache && ctrl.invalidateRatingCache();
+        document.querySelectorAll('.player-card .rating, .trade-player-item .player-rating').forEach(el => {
+            el.setAttribute('data-loading', '1');
+            el.textContent = '--';
+            el.removeAttribute('data-rating');
+        });
+        ctrl.fillRatingsForCards().catch(() => {});
+    };
+
+    select.addEventListener('change', () => {
+        const formatSelect = document.getElementById('scoringFormat');
+        if (formatSelect && formatSelect.value !== select.value) {
+            formatSelect.value = select.value;
+            formatSelect.dispatchEvent(new Event('change'));
+        }
+        refreshScoringPill();
+        document.dispatchEvent(new CustomEvent('scoringChanged', { detail: { scoring: currentScoring() } }));
+        recomputeAllRatings();
+    });
+
+    document.addEventListener('leagueConnected', () => { refreshScoringPill(); recomputeAllRatings(); });
+    document.addEventListener('leagueDisconnected', () => { refreshScoringPill(); recomputeAllRatings(); });
+
+    const formatSelect = document.getElementById('scoringFormat');
+    if (formatSelect) formatSelect.addEventListener('change', refreshScoringPill);
+
+    setInterval(refreshScoringPill, 4000);
 }
 
 function initializeTeamDisplay() {
@@ -797,9 +987,8 @@ function showGlobalAddPlayerModal(options) {
     function addSelected() {
         if (!(selectedIndex >= 0 && currentResults[selectedIndex])) return;
         const m = currentResults[selectedIndex];
-        const rating = (Math.random() * 15 + 80).toFixed(1);
         if (mode === 'trade') {
-            const tradeAdded = addTradePlayer(side, { name: m.full_name, position: m.position, rating, id: m.id, team: m.team });
+            const tradeAdded = addTradePlayer(side, { name: m.full_name, position: m.position, rating: '--', id: m.id, team: m.team });
             if (tradeAdded) closeModal();
         } else {
             const slotPosition = lineupPosition || m.position || 'FLEX';
@@ -1049,8 +1238,7 @@ function renderTradeSearchResults(matches, side, resultsEl, closeModal, getSelec
                 const position = item.getAttribute('data-pos');
                 const id = item.getAttribute('data-id');
                 const team = item.getAttribute('data-team');
-                const rating = (Math.random() * 15 + 80).toFixed(1);
-                const added = addTradePlayer(side, { name, position, rating, id: id || undefined, team: team || undefined });
+                const added = addTradePlayer(side, { name, position, rating: '--', id: id || undefined, team: team || undefined });
                 if (added) closeModal();
             }
         });
@@ -1081,8 +1269,9 @@ function ensureTradeAnalysisContainer() {
             <div class="trade-summary">
                 <div class="summary-stats">
                     <div class="stat">
-                        <span class="label">Trade Value:</span>
-                        <span class="value" id="tradeValue">0</span>
+                        <span class="label">Per-player net</span>
+                        <span class="value" id="tradePerPlayerNet">0</span>
+                        <span class="trade-stat-hint">Their avg minus yours (fair for uneven player counts)</span>
                     </div>
                     <div class="stat">
                         <span class="label">Fairness:</span>
@@ -1099,10 +1288,11 @@ function ensureTradeAnalysisContainer() {
             .giving-players h4, .receiving-players h4 { color: #6bb6ff; margin-bottom: 15px; text-align: center; }
             .players-list { min-height: 100px; border: 1px solid rgba(74,158,255,0.2); border-radius: 8px; padding: 10px; background: rgba(26,26,46,0.5); }
             .trade-summary { border-top: 1px solid rgba(74,158,255,0.2); padding-top: 20px; }
-            .summary-stats { display: flex; justify-content: space-around; }
-            .stat { text-align: center; }
+            .summary-stats { display: flex; flex-wrap: wrap; justify-content: space-around; gap: 12px; }
+            .stat { text-align: center; max-width: 220px; }
             .stat .label { display: block; color: #b0b0b0; font-size: 0.9rem; margin-bottom: 5px; }
             .stat .value { display: block; color: #4a9eff; font-size: 1.2rem; font-weight: 600; }
+            .trade-stat-hint { display: block; color: #7a8aad; font-size: 0.7rem; line-height: 1.3; margin-top: 4px; max-width: 200px; margin-left: auto; margin-right: auto; }
         `;
         document.head.appendChild(style);
         const tradeAnalyzer = document.querySelector('.trade-analyzer');
@@ -1175,6 +1365,21 @@ function addTradePlayer(side, data) {
     target.appendChild(el);
     el.querySelector('.remove-btn').addEventListener('click', () => { el.remove(); updateTradeAnalysis(); });
     updateTradeAnalysis();
+
+    const ratingEl = el.querySelector('.player-rating');
+    if (ratingEl && (data.rating == null || data.rating === '--')) {
+        ratingEl.setAttribute('data-loading', '1');
+        const handle = data.id ? { id: String(data.id), name: data.name, team: data.team || '' } : { name: data.name, team: data.team || '' };
+        const ctrl = window.apiController;
+        if (ctrl && typeof ctrl.getPlayerRating === 'function') {
+            ctrl.getPlayerRating(handle).then(r => {
+                FantasyAPIController.applyRatingToElement(ratingEl, r);
+                updateTradeAnalysis();
+            }).catch(() => { ratingEl.textContent = '--'; });
+        }
+    } else if (ratingEl) {
+        ratingEl.setAttribute('data-rating', String(data.rating));
+    }
     return true;
 }
 
@@ -1200,101 +1405,7 @@ function setupAddPlayerButtons() {
 }
 
 function addPlayerToTrade(listItem, name, position, rating) {
-    // Create trade analysis container if it doesn't exist
-    let tradeAnalysis = document.querySelector('.trade-analysis-container');
-    if (!tradeAnalysis) {
-        tradeAnalysis = document.createElement('div');
-        tradeAnalysis.className = 'trade-analysis-container';
-        tradeAnalysis.innerHTML = `
-            <h3>Trade Analysis</h3>
-            <div class="trade-players">
-                <div class="giving-players">
-                    <h4>Giving</h4>
-                    <div class="players-list" id="givingList"></div>
-                </div>
-                <div class="receiving-players">
-                    <h4>Receiving</h4>
-                    <div class="players-list" id="receivingList"></div>
-                </div>
-            </div>
-            <div class="trade-summary">
-                <div class="summary-stats">
-                    <div class="stat">
-                        <span class="label">Trade Value:</span>
-                        <span class="value" id="tradeValue">0</span>
-                    </div>
-                    <div class="stat">
-                        <span class="label">Fairness:</span>
-                        <span class="value" id="fairness">-</span>
-                    </div>
-                </div>
-            </div>
-        `;
-        
-        // Add styles for trade analysis
-        const style = document.createElement('style');
-        style.textContent = `
-            .trade-analysis-container {
-                background: rgba(26, 26, 46, 0.8);
-                border-radius: 15px;
-                padding: 25px;
-                margin-top: 30px;
-                border: 1px solid rgba(74, 158, 255, 0.2);
-            }
-            .trade-analysis-container h3 {
-                color: #4a9eff;
-                margin-bottom: 20px;
-                text-align: center;
-            }
-            .trade-players {
-                display: grid;
-                grid-template-columns: 1fr 1fr;
-                gap: 20px;
-                margin-bottom: 20px;
-            }
-            .giving-players h4,
-            .receiving-players h4 {
-                color: #6bb6ff;
-                margin-bottom: 15px;
-                text-align: center;
-            }
-            .players-list {
-                min-height: 100px;
-                border: 1px solid rgba(74, 158, 255, 0.2);
-                border-radius: 8px;
-                padding: 10px;
-                background: rgba(26, 26, 46, 0.5);
-            }
-            .trade-summary {
-                border-top: 1px solid rgba(74, 158, 255, 0.2);
-                padding-top: 20px;
-            }
-            .summary-stats {
-                display: flex;
-                justify-content: space-around;
-            }
-            .stat {
-                text-align: center;
-            }
-            .stat .label {
-                display: block;
-                color: #b0b0b0;
-                font-size: 0.9rem;
-                margin-bottom: 5px;
-            }
-            .stat .value {
-                display: block;
-                color: #4a9eff;
-                font-size: 1.2rem;
-                font-weight: 600;
-            }
-        `;
-        document.head.appendChild(style);
-        
-        // Insert before the analyze button
-        const tradeAnalyzer = document.querySelector('.trade-analyzer');
-        tradeAnalyzer.insertBefore(tradeAnalysis, tradeAnalyzer.querySelector('.trade-analysis'));
-    }
+    ensureTradeAnalysisContainer();
     
     // Determine which list to add to based on the original list
     const isMyTeam = listItem.closest('#myTeamList') !== null;
@@ -1302,14 +1413,27 @@ function addPlayerToTrade(listItem, name, position, rating) {
     
     const playerElement = document.createElement('div');
     playerElement.className = 'trade-player-item';
+    playerElement.setAttribute('data-player-name', name || '');
     playerElement.innerHTML = `
         <div class="player-info">
             <strong>${name}</strong>
             <span>${position}</span>
         </div>
-        <div class="player-rating">${rating}</div>
+        <div class="player-rating">--</div>
         <button class="remove-btn">×</button>
     `;
+    void rating;
+    const ratingEl = playerElement.querySelector('.player-rating');
+    if (ratingEl) {
+        ratingEl.setAttribute('data-loading', '1');
+        const ctrl = window.apiController;
+        if (ctrl && typeof ctrl.getPlayerRating === 'function') {
+            ctrl.getPlayerRating({ name }).then(r => {
+                FantasyAPIController.applyRatingToElement(ratingEl, r);
+                updateTradeAnalysis();
+            }).catch(() => { ratingEl.textContent = '--'; });
+        }
+    }
     
     // Add styles for trade player items
     const itemStyle = document.createElement('style');
@@ -1384,7 +1508,6 @@ function updateTradeAnalysis() {
     const givingPlayers = givingList.querySelectorAll('.trade-player-item');
     const receivingPlayers = receivingList.querySelectorAll('.trade-player-item');
     
-    // Calculate trade value (simplified)
     let givingValue = 0;
     let receivingValue = 0;
     
@@ -1398,12 +1521,20 @@ function updateTradeAnalysis() {
         receivingValue += Number.isNaN(rating) ? 0 : rating;
     });
     
-    const tradeValue = receivingValue - givingValue;
-    const fairness = Math.abs(tradeValue) < 5 ? 'Fair' : tradeValue > 0 ? 'Favorable' : 'Unfavorable';
+    const nGive = givingPlayers.length;
+    const nRec = receivingPlayers.length;
+    const avgGive = nGive > 0 ? givingValue / nGive : 0;
+    const avgRec = nRec > 0 ? receivingValue / nRec : 0;
+    const perPlayerNet = avgRec - avgGive;
+    const fairness = Math.abs(perPlayerNet) < 5 ? 'Fair' : perPlayerNet > 0 ? 'Favorable' : 'Unfavorable';
     
-    const tradeValueEl = document.getElementById('tradeValue');
+    const perEl = document.getElementById('tradePerPlayerNet');
     const fairnessEl = document.getElementById('fairness');
-    if (tradeValueEl) tradeValueEl.textContent = tradeValue.toFixed(1);
+    if (perEl) {
+        const s = perPlayerNet >= 0 ? '+' : '';
+        perEl.textContent = `${s}${perPlayerNet.toFixed(1)}`;
+        perEl.style.color = perPlayerNet > 0 ? '#4a9eff' : perPlayerNet < 0 ? '#ff4757' : '#00d4aa';
+    }
     if (fairnessEl) {
         fairnessEl.textContent = fairness;
         fairnessEl.style.color = fairness === 'Fair' ? '#00d4aa' : fairness === 'Favorable' ? '#4a9eff' : '#ff4757';
@@ -1436,6 +1567,10 @@ async function analyzeTrade() {
     }
 
     try {
+        if (apiController && typeof apiController.fillRatingsForCards === 'function') {
+            try { await apiController.fillRatingsForCards(); } catch (_e) {}
+        }
+
         // Local numeric analysis as a baseline
         const baseAnalysis = performTradeAnalysis(givingPlayersEls, receivingPlayersEls);
 
@@ -1463,13 +1598,13 @@ async function analyzeTrade() {
         }
 
         try {
-            showTradeAnalysisModal({
+            showTradeAnalysisResult({
                 ...baseAnalysis,
                 ai: aiResult
             });
         } catch (err) {
             console.error('Could not show trade results:', err);
-            showNotification('Could not show the analysis window. See console for details.', 'warning');
+            showNotification('Could not show the analysis. See console for details.', 'warning');
         }
     } finally {
         if (analyzeBtn) {
@@ -1480,11 +1615,10 @@ async function analyzeTrade() {
 }
 
 function performTradeAnalysis(givingPlayers, receivingPlayers) {
-    // Simplified analysis - in a real app, this would use advanced algorithms
     let givingValue = 0;
     let receivingValue = 0;
-    let givingCount = givingPlayers.length;
-    let receivingCount = receivingPlayers.length;
+    const givingCount = givingPlayers.length;
+    const receivingCount = receivingPlayers.length;
     
     givingPlayers.forEach(player => {
         const rating = parseFloat(player.querySelector('.player-rating')?.textContent || '0');
@@ -1496,27 +1630,27 @@ function performTradeAnalysis(givingPlayers, receivingPlayers) {
         if (!Number.isNaN(rating)) receivingValue += rating;
     });
     
-    const netValue = receivingValue - givingValue;
-    const avgGiving = givingValue / givingCount;
-    const avgReceiving = receivingValue / receivingCount;
+    const avgGiving = givingCount > 0 ? givingValue / givingCount : 0;
+    const avgReceiving = receivingCount > 0 ? receivingValue / receivingCount : 0;
+    const netPerPlayer = avgReceiving - avgGiving;
     
     return {
-        netValue: netValue.toFixed(1),
+        netPerPlayer: netPerPlayer.toFixed(1),
         avgGiving: avgGiving.toFixed(1),
         avgReceiving: avgReceiving.toFixed(1),
-        fairness: Math.abs(netValue) < 5 ? 'Fair' : netValue > 0 ? 'Favorable' : 'Unfavorable',
-        recommendation: getTradeRecommendation(netValue)
+        fairness: Math.abs(netPerPlayer) < 5 ? 'Fair' : netPerPlayer > 0 ? 'Favorable' : 'Unfavorable',
+        recommendation: getTradeRecommendation(netPerPlayer)
     };
 }
 
-function getTradeRecommendation(netValue) {
-    if (Math.abs(netValue) < 5) {
-        return 'This is a fair trade. Both sides get similar value.';
-    } else if (netValue > 10) {
+function getTradeRecommendation(netPerPlayer) {
+    if (Math.abs(netPerPlayer) < 5) {
+        return 'This is a fair trade. Both sides get similar per-player value.';
+    } else if (netPerPlayer > 10) {
         return 'This trade heavily favors you. Consider accepting!';
-    } else if (netValue > 0) {
+    } else if (netPerPlayer > 0) {
         return 'This trade slightly favors you. Good value.';
-    } else if (netValue > -10) {
+    } else if (netPerPlayer > -10) {
         return 'This trade slightly favors your opponent. Consider negotiating.';
     } else {
         return 'This trade heavily favors your opponent. Not recommended.';
@@ -1565,9 +1699,10 @@ function renderContextSourcesHtml({ contextAsOf, sources, disclaimer }) {
     `;
 }
 
-function showTradeAnalysisModal(analysis) {
-    const modal = document.createElement('div');
-    modal.className = 'analysis-modal';
+function showTradeAnalysisResult(analysis) {
+    const container = document.getElementById('tradeAnalysisResponse');
+    if (!container) return;
+
     const ai = analysis.ai || null;
     const fairnessRaw = (ai && ai.fairness != null && ai.fairness !== '') ? ai.fairness : analysis.fairness;
     const fairnessLabel = String(fairnessRaw != null ? fairnessRaw : 'Fair');
@@ -1576,156 +1711,55 @@ function showTradeAnalysisModal(analysis) {
     const summaryFromAi = ai && typeof ai.summary === 'string' && ai.summary.length > 0;
     const recommendationText = summaryFromAi ? ai.summary : (analysis.recommendation || '');
     const aiGrade = ai && typeof ai.grade === 'number' ? ai.grade.toFixed(1) : null;
-    const netValueNumeric = parseFloat(String(analysis.netValue));
-    const netDisplay = (analysis && analysis.netValue != null) ? String(analysis.netValue) : '0.0';
-    const sign = !Number.isNaN(netValueNumeric) && netValueNumeric > 0 ? '+' : '';
-    modal.innerHTML = `
-        <div class="modal-content">
-            <h3>Trade Analysis Results</h3>
-            <div class="analysis-results">
-                <div class="result-item">
-                    <span class="label">Net Value:</span>
-                    <span class="value ${!Number.isNaN(netValueNumeric) && netValueNumeric > 0 ? 'positive' : 'negative'}">${sign}${netDisplay}</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Your Average:</span>
-                    <span class="value">${String(analysis.avgGiving != null ? analysis.avgGiving : '')}</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Their Average:</span>
-                    <span class="value">${String(analysis.avgReceiving != null ? analysis.avgReceiving : '')}</span>
-                </div>
-                <div class="result-item">
-                    <span class="label">Fairness:</span>
-                    <span class="value ${fairnessClass}">${fairnessLabel}</span>
-                </div>
-                ${aiGrade !== null ? `
-                <div class="result-item">
-                    <span class="label">AI Grade (0–100):</span>
-                    <span class="value">${aiGrade}</span>
-                </div>` : ''}
-            </div>
-            <div class="recommendation">
-                <h4 class="recommendation-heading"></h4>
-                <p class="recommendation-body"></p>
-            </div>
-            ${ai ? renderContextSourcesHtml({ contextAsOf: ai.contextAsOf, sources: ai.sources, disclaimer: ai.disclaimer }) : ''}
-            <button class="close-modal">Close</button>
+    const netPerPlayer = parseFloat(String(analysis.netPerPlayer));
+    const perSign = !Number.isNaN(netPerPlayer) && netPerPlayer > 0 ? '+' : '';
+    const perClass = Number.isNaN(netPerPlayer) ? '' : (netPerPlayer > 0 ? 'positive' : netPerPlayer < 0 ? 'negative' : '');
+
+    container.hidden = false;
+    container.innerHTML = `
+        <div class="team-analysis-response-header">
+            <i class="fas fa-chart-line"></i>
+            <h3>Trade analysis</h3>
         </div>
+        <p class="trade-analysis-note">Per-player net compares average rating you receive vs. average you give, so 2-for-1 or 4-for-1 deals are not automatically skewed.</p>
+        <div class="trade-analysis-results-grid">
+            <div class="trade-analysis-result-row">
+                <span class="label">Per-player net (primary)</span>
+                <span class="value ${perClass}">${perSign}${Number.isNaN(netPerPlayer) ? '0.0' : String(analysis.netPerPlayer)}</span>
+            </div>
+            <div class="trade-analysis-result-row">
+                <span class="label">Your average</span>
+                <span class="value">${escapeHtml(String(analysis.avgGiving != null ? analysis.avgGiving : ''))}</span>
+            </div>
+            <div class="trade-analysis-result-row">
+                <span class="label">Their average</span>
+                <span class="value">${escapeHtml(String(analysis.avgReceiving != null ? analysis.avgReceiving : ''))}</span>
+            </div>
+            <div class="trade-analysis-result-row">
+                <span class="label">Fairness (from per-player net)</span>
+                <span class="value ${fairnessClass}">${escapeHtml(fairnessLabel)}</span>
+            </div>
+            ${aiGrade !== null ? `
+            <div class="trade-analysis-result-row">
+                <span class="label">AI grade (0–100)</span>
+                <span class="value">${escapeHtml(aiGrade)}</span>
+            </div>` : ''}
+        </div>
+        <div class="trade-analysis-recommendation">
+            <h4></h4>
+            <p></p>
+        </div>
+        ${ai ? renderContextSourcesHtml({ contextAsOf: ai.contextAsOf, sources: ai.sources, disclaimer: ai.disclaimer }) : ''}
     `;
-    const h4 = modal.querySelector('.recommendation-heading');
-    const p = modal.querySelector('.recommendation-body');
-    if (h4) h4.textContent = ai ? 'AI Recommendation:' : 'Recommendation:';
+
+    const h4 = container.querySelector('.trade-analysis-recommendation h4');
+    const p = container.querySelector('.trade-analysis-recommendation p');
+    if (h4) h4.textContent = ai ? 'AI summary' : 'Heuristic take';
     if (p) p.textContent = recommendationText;
-    
-    // Add modal styles
-    const style = document.createElement('style');
-    style.textContent = `
-        .analysis-modal {
-            position: fixed;
-            top: 0;
-            left: 0;
-            width: 100%;
-            height: 100%;
-            background: rgba(0, 0, 0, 0.8);
-            display: flex;
-            justify-content: center;
-            align-items: center;
-            z-index: 10050;
-        }
-        .analysis-modal .modal-content {
-            background: #1a1a2e;
-            padding: 30px;
-            border-radius: 15px;
-            border: 2px solid #4a9eff;
-            text-align: center;
-            max-width: 500px;
-            width: 90%;
-        }
-        .analysis-modal h3 {
-            color: #4a9eff;
-            margin-bottom: 20px;
-        }
-        .analysis-results {
-            display: grid;
-            gap: 15px;
-            margin-bottom: 20px;
-        }
-        .result-item {
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            padding: 10px 15px;
-            background: rgba(74, 158, 255, 0.1);
-            border-radius: 8px;
-        }
-        .result-item .label {
-            color: #b0b0b0;
-            font-weight: 500;
-        }
-        .result-item .value {
-            font-weight: 600;
-            font-size: 1.1rem;
-        }
-        .result-item .value.positive {
-            color: #00d4aa;
-        }
-        .result-item .value.negative {
-            color: #ff4757;
-        }
-        .result-item .value.fair {
-            color: #4a9eff;
-        }
-        .result-item .value.favorable {
-            color: #00d4aa;
-        }
-        .result-item .value.unfavorable {
-            color: #ff4757;
-        }
-        .recommendation {
-            background: rgba(74, 158, 255, 0.1);
-            padding: 15px;
-            border-radius: 8px;
-            margin-bottom: 20px;
-        }
-        .recommendation h4 {
-            color: #4a9eff;
-            margin-bottom: 10px;
-        }
-        .recommendation p {
-            color: #b0b0b0;
-            line-height: 1.5;
-        }
-        .close-modal {
-            background: #4a9eff;
-            color: #1a1a2e;
-            border: none;
-            padding: 12px 25px;
-            border-radius: 8px;
-            cursor: pointer;
-            font-weight: 600;
-            font-size: 1rem;
-        }
-        .close-modal:hover {
-            background: #6bb6ff;
-        }
-    `;
-    
-    document.head.appendChild(style);
-    document.body.appendChild(modal);
-    
-    // Close modal functionality
-    modal.querySelector('.close-modal').addEventListener('click', () => {
-        document.body.removeChild(modal);
-        document.head.removeChild(style);
-    });
-    
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            document.body.removeChild(modal);
-            document.head.removeChild(style);
-        }
-    });
+
+    try {
+        container.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    } catch (_e) {}
 }
 
 function getLineupAndBenchPlayers() {
@@ -1747,6 +1781,9 @@ function getLineupAndBenchPlayers() {
 }
 
 async function analyzeTeam() {
+    if (apiController && typeof apiController.fillRatingsForCards === 'function') {
+        try { await apiController.fillRatingsForCards(); } catch (_e) {}
+    }
     const { lineup, bench } = getLineupAndBenchPlayers();
     const total = lineup.length + bench.length;
     if (total === 0) {

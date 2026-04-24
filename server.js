@@ -13,6 +13,7 @@ const express = require('express');
 const path = require('path');
 const { buildContext, formatContextBlock } = require('./lib/context');
 const rss = require('./lib/context/rss');
+const ratings = require('./lib/ratings');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -228,6 +229,81 @@ app.post('/api/analyze-team', async (req, res) => {
     }
 });
 
+function parsePlayerHandlesQuery(req) {
+    const handles = [];
+    const ids = String(req.query.ids || '').split(',').map(s => s.trim()).filter(Boolean);
+    for (const id of ids) handles.push({ sleeperId: id, id });
+
+    const namesRaw = String(req.query.names || '').trim();
+    if (namesRaw) {
+        for (const part of namesRaw.split('|')) {
+            const [name, team] = part.split('@').map(s => (s || '').trim());
+            if (name) handles.push({ name, team: team || '' });
+        }
+    }
+
+    if (Array.isArray(req.body?.players)) {
+        for (const p of req.body.players) {
+            if (!p) continue;
+            handles.push({
+                sleeperId: p.sleeperId || (p.id != null ? String(p.id) : null),
+                id: p.id != null ? String(p.id) : null,
+                gsisId: p.gsisId || p.gsis_id || null,
+                espnId: p.espnId || p.espn_id || null,
+                name: p.name || p.full_name || '',
+                team: p.team || ''
+            });
+        }
+    }
+    return handles;
+}
+
+function isLocalhostRequest(req) {
+    const ip = (req.ip || req.connection?.remoteAddress || '').replace('::ffff:', '');
+    return ip === '127.0.0.1' || ip === '::1' || ip === 'localhost';
+}
+
+async function handleRatingRequest(req, res) {
+    try {
+        const handles = parsePlayerHandlesQuery(req);
+        if (handles.length === 0) {
+            return res.status(400).json({ error: 'Provide ids=<csv>, names=Name@TEAM|..., or POST {players:[]}' });
+        }
+        const scoring = String(req.query.scoring || (req.body && req.body.scoring) || 'full-ppr');
+        const result = await ratings.getRatings({ players: handles, scoring });
+        res.json({
+            asOf: result.asOf,
+            scoring: result.scoring,
+            tableSize: result.size,
+            ratings: result.ratings
+        });
+    } catch (err) {
+        console.error('rating error:', err);
+        res.status(500).json({ error: err.message || 'Rating lookup failed.' });
+    }
+}
+
+app.get('/api/players/rating', handleRatingRequest);
+app.post('/api/players/rating', handleRatingRequest);
+
+app.post('/api/players/rating/refresh', async (req, res) => {
+    const token = process.env.RATINGS_REFRESH_TOKEN || '';
+    const provided = String(req.headers['x-refresh-token'] || req.query.token || '');
+    if (token) {
+        if (provided !== token) return res.status(401).json({ error: 'Invalid token' });
+    } else if (!isLocalhostRequest(req)) {
+        return res.status(403).json({ error: 'Refresh restricted to localhost (set RATINGS_REFRESH_TOKEN to expose)' });
+    }
+    try {
+        const scorings = req.body?.scorings || ['full-ppr', 'half-ppr', 'no-ppr'];
+        const out = await ratings.refreshAll(scorings);
+        res.json(out);
+    } catch (err) {
+        console.error('rating refresh error:', err);
+        res.status(500).json({ error: err.message || 'Rating refresh failed.' });
+    }
+});
+
 module.exports = app;
 
 if (require.main === module) {
@@ -238,6 +314,12 @@ if (require.main === module) {
         if (intervalMin > 0 && process.env.RSS_DISABLE !== '1') {
             console.log(`RSS poller starting (every ${intervalMin} min).`);
             rss.startPoller({ intervalMinutes: intervalMin });
+        }
+
+        const ratingsHours = parseInt(process.env.RATINGS_REFRESH_INTERVAL_HOURS || '24', 10);
+        if (ratingsHours > 0 && process.env.RATINGS_DISABLE !== '1') {
+            console.log(`Ratings refresh starting (every ${ratingsHours}h).`);
+            ratings.startPoller({ intervalHours: ratingsHours });
         }
     });
 }

@@ -16,6 +16,16 @@
                 <i class="fas fa-football-ball"></i>
                 <span class="brand-name">Rec League AI Analyzer</span>
             </div>
+            <div class="scoring-pill" id="scoringPill" title="Scoring used to compute player ratings">
+                <span class="scoring-pill-label">Scoring:</span>
+                <span class="scoring-pill-value" id="scoringPillValue">Full PPR</span>
+                <select class="scoring-pill-select" id="scoringPillSelect" aria-label="Choose scoring format">
+                    <option value="full-ppr">Full PPR</option>
+                    <option value="half-ppr">Half PPR</option>
+                    <option value="no-ppr">No PPR (Standard)</option>
+                </select>
+                <i class="fas fa-chevron-down scoring-pill-caret" aria-hidden="true"></i>
+            </div>
         </div>
     </header>
 
@@ -177,6 +187,7 @@
                     <i class="fas fa-chart-line"></i>
                     Analyze Trade
                 </button>
+                <div class="trade-analysis-response" id="tradeAnalysisResponse" hidden></div>
             </div>
         </section>
     </div>

@@ -7,6 +7,109 @@ class FantasyAPIController {
         this.userData = null;
         this.leagueData = null;
         this.openAIModel = 'gpt-5.4-nano';
+        // Per-session rating cache keyed by `${scoring}|${id|name}`. Server already
+        // does the heavy lifting; this just avoids retransmitting on render churn.
+        this._ratingCache = new Map();
+        this._ratingInflight = new Map();
+    }
+
+    _scoringFromUI() {
+        if (typeof window !== 'undefined' && typeof window.currentScoring === 'function') {
+            try { return window.currentScoring(); } catch (_e) { /* fall through */ }
+        }
+        if (this.leagueData && (this.leagueData.league_id || this.leagueData.leagueId)) {
+            return `league:${this.leagueData.league_id || this.leagueData.leagueId}`;
+        }
+        const sel = typeof document !== 'undefined' && (document.getElementById('scoringPillSelect') || document.getElementById('scoringFormat'));
+        return (sel && sel.value) || 'full-ppr';
+    }
+
+    /**
+     * Fetch ratings for many players in a single round-trip.
+     * `players` items can carry { id|sleeperId, name, team }.
+     * Returns a Map keyed by the player's `id` (or normalized name fallback).
+     */
+    async getPlayerRatings(players, scoring) {
+        const list = (players || []).filter(Boolean);
+        if (list.length === 0) return new Map();
+        const sc = scoring || this._scoringFromUI();
+        const apiBase = (typeof window !== 'undefined' && window.APP_API_URL)
+            ? String(window.APP_API_URL).replace(/\/$/, '') + '/'
+            : '/';
+
+        const result = new Map();
+        const toFetch = [];
+        for (const p of list) {
+            const key = this._ratingCacheKey(sc, p);
+            const cached = this._ratingCache.get(key);
+            if (cached) {
+                result.set(this._playerKey(p), cached);
+            } else {
+                toFetch.push(p);
+            }
+        }
+        if (toFetch.length === 0) return result;
+
+        try {
+            const res = await fetch(apiBase + 'api/players/rating', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ scoring: sc, players: toFetch })
+            });
+            if (!res.ok) throw new Error(`rating HTTP ${res.status}`);
+            const body = await res.json();
+            const arr = Array.isArray(body.ratings) ? body.ratings : [];
+            for (let i = 0; i < toFetch.length; i++) {
+                const p = toFetch[i];
+                const r = arr[i] || null;
+                const key = this._ratingCacheKey(sc, p);
+                if (r) this._ratingCache.set(key, r);
+                result.set(this._playerKey(p), r);
+            }
+        } catch (e) {
+            console.warn('rating fetch failed:', e.message);
+            for (const p of toFetch) result.set(this._playerKey(p), null);
+        }
+        return result;
+    }
+
+    /**
+     * Fetch a single player's rating with in-flight de-duping so multiple
+     * concurrent renders for the same player don't hammer the server.
+     */
+    async getPlayerRating(player, scoring) {
+        if (!player) return null;
+        const sc = scoring || this._scoringFromUI();
+        const key = this._ratingCacheKey(sc, player);
+        const cached = this._ratingCache.get(key);
+        if (cached) return cached;
+        if (this._ratingInflight.has(key)) return this._ratingInflight.get(key);
+
+        const promise = this.getPlayerRatings([player], sc).then(map => {
+            const r = map.get(this._playerKey(player)) || null;
+            this._ratingInflight.delete(key);
+            return r;
+        }).catch(e => {
+            this._ratingInflight.delete(key);
+            throw e;
+        });
+        this._ratingInflight.set(key, promise);
+        return promise;
+    }
+
+    _playerKey(p) {
+        const id = p && (p.sleeperId || p.id);
+        if (id != null) return `id:${id}`;
+        return `name:${String((p && (p.name || p.full_name)) || '').toLowerCase()}|${String((p && p.team) || '').toUpperCase()}`;
+    }
+
+    _ratingCacheKey(scoring, p) {
+        return `${scoring}::${this._playerKey(p)}`;
+    }
+
+    invalidateRatingCache() {
+        this._ratingCache.clear();
+        this._ratingInflight.clear();
     }
 
     // Sleeper API Methods
@@ -694,7 +797,11 @@ class FantasyAPIController {
             
             // Update UI with league data
             this.updateUIWithLeagueData();
-            
+
+            try {
+                document.dispatchEvent(new CustomEvent('leagueConnected', { detail: { leagueId: selectedLeague.league_id, source: 'sleeper' } }));
+            } catch (_e) {}
+
             // Populate team display with roster data
             this.populateTeamDisplay();
             
@@ -1039,7 +1146,15 @@ class FantasyAPIController {
         playerCard.appendChild(playerImage);
         playerCard.appendChild(playerInfo);
         playerCard.appendChild(removeBtn);
-        
+
+        const ratingEl = playerInfo.querySelector('.rating');
+        if (ratingEl) ratingEl.setAttribute('data-loading', '1');
+        if (typeof queueMicrotask === 'function') {
+            queueMicrotask(() => { this.fillRatingForCard(playerCard).catch(() => {}); });
+        } else {
+            setTimeout(() => { this.fillRatingForCard(playerCard).catch(() => {}); }, 0);
+        }
+
         return playerCard;
     }
 
@@ -1246,9 +1361,103 @@ class FantasyAPIController {
         benchSection.appendChild(benchContainer);
     }
 
-    calculatePlayerRating(player) {
-        // Simple rating calculation - could be enhanced with actual Sleeper data
-        return Math.floor(Math.random() * 20) + 80; // Placeholder rating
+    /**
+     * Synchronous placeholder used while building player cards. Returns `--`;
+     * the real rating is filled in by `fillRatingForCard`/`fillRatingsForCards`
+     * once the server responds. We never invent a rating client-side.
+     */
+    calculatePlayerRating(_player) {
+        return '--';
+    }
+
+    /**
+     * Apply a server-side rating object to a single rating element.
+     * The element should be a `.rating` or `.player-rating` chip.
+     */
+    static applyRatingToElement(el, rating) {
+        if (!el) return;
+        if (!rating || rating.rating == null) {
+            el.textContent = '--';
+            el.setAttribute('data-rating', '--');
+            el.removeAttribute('data-loading');
+            const drivers = (rating && Array.isArray(rating.drivers)) ? rating.drivers : ['No qualifying games'];
+            el.setAttribute('data-drivers', JSON.stringify(drivers));
+            el.setAttribute('data-confidence', '0');
+            el.setAttribute('data-confidence-band', 'low');
+            el.setAttribute('data-as-of', (rating && rating.asOf) || '');
+            el.setAttribute('data-scoring', (rating && rating.scoring) || '');
+            el.setAttribute('data-name', (rating && rating.name) || '');
+            return;
+        }
+        const value = (typeof rating.rating === 'number') ? rating.rating.toFixed(1) : String(rating.rating);
+        el.textContent = value;
+        el.setAttribute('data-rating', value);
+        el.removeAttribute('data-loading');
+        el.setAttribute('data-drivers', JSON.stringify(rating.drivers || []));
+        el.setAttribute('data-confidence', String(rating.confidence != null ? rating.confidence : 0));
+        const band = (rating.confidence != null && rating.confidence < 0.6) ? 'low' : 'normal';
+        el.setAttribute('data-confidence-band', band);
+        el.setAttribute('data-as-of', rating.asOf || '');
+        el.setAttribute('data-scoring', rating.scoring || '');
+        el.setAttribute('data-name', rating.name || '');
+        el.setAttribute('data-position', rating.position || '');
+        el.setAttribute('data-games', String(rating.games || 0));
+    }
+
+    /**
+     * Look at every `.player-card .rating` (and trade-list `.player-rating`)
+     * currently in the DOM, group by player handle, fetch ratings in one
+     * batch, then patch the chips. Safe to call repeatedly.
+     */
+    async fillRatingsForCards(scoring) {
+        if (typeof document === 'undefined') return;
+        const cardChips = Array.from(document.querySelectorAll('.player-card .rating'));
+        const tradeChips = Array.from(document.querySelectorAll('.trade-player-item .player-rating'));
+        const all = [...cardChips, ...tradeChips];
+        const handles = [];
+        const targets = [];
+        const seen = new Set();
+        for (const el of all) {
+            if (el.getAttribute('data-rating') && el.getAttribute('data-rating') !== '--' && !el.getAttribute('data-loading')) continue;
+            const card = el.closest('[data-player-id], [data-player-name]');
+            if (!card) continue;
+            const id = card.getAttribute('data-player-id') || '';
+            const name = card.getAttribute('data-player-name') || '';
+            const team = card.getAttribute('data-player-team') || '';
+            const key = id ? `id:${id}` : `name:${name}|${team}`;
+            const handle = id ? { id, name, team } : { name, team };
+            el.setAttribute('data-loading', '1');
+            if (!seen.has(key)) {
+                seen.add(key);
+                handles.push(handle);
+            }
+            targets.push({ el, handle, key });
+        }
+        if (handles.length === 0) return;
+
+        const ratings = await this.getPlayerRatings(handles, scoring);
+        for (const t of targets) {
+            const r = ratings.get(this._playerKey(t.handle));
+            FantasyAPIController.applyRatingToElement(t.el, r);
+        }
+    }
+
+    /**
+     * Convenience: fill the rating chip(s) for a single card immediately
+     * after it's been appended to the DOM. Called from createPlayerCard.
+     */
+    async fillRatingForCard(card, scoring) {
+        if (!card) return;
+        const el = card.querySelector('.rating') || card.querySelector('.player-rating');
+        if (!el) return;
+        if (el.getAttribute('data-rating') && el.getAttribute('data-rating') !== '--' && !el.getAttribute('data-loading')) return;
+        el.setAttribute('data-loading', '1');
+        const id = card.getAttribute('data-player-id') || '';
+        const name = card.getAttribute('data-player-name') || '';
+        const team = card.getAttribute('data-player-team') || '';
+        const handle = id ? { id, name, team } : { name, team };
+        const rating = await this.getPlayerRating(handle, scoring);
+        FantasyAPIController.applyRatingToElement(el, rating);
     }
 
     showEmptyTeamDisplay() {
