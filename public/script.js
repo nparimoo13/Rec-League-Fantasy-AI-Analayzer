@@ -39,7 +39,7 @@ function setupLeagueSettings() {
             if (!isNaN(n)) benchSpotsInput.value = n;
         }
         if (saved.flexSpots != null && flexSpotsInput) {
-            const n = Math.min(4, Math.max(0, parseInt(saved.flexSpots, 10)));
+            const n = Math.min(8, Math.max(0, parseInt(saved.flexSpots, 10)));
             if (!isNaN(n)) flexSpotsInput.value = n;
         }
     } catch (e) {}
@@ -540,7 +540,7 @@ function updateLeagueSettings() {
     const benchVal = benchEl ? parseInt(benchEl.value, 10) : 6;
     const flexVal = flexEl ? parseInt(flexEl.value, 10) : 1;
     const benchSpotsNum = isNaN(benchVal) || benchVal < 0 ? 6 : Math.min(10, Math.max(0, benchVal));
-    const flexSpotsNum = isNaN(flexVal) || flexVal < 0 ? 1 : Math.min(4, Math.max(0, flexVal));
+    const flexSpotsNum = isNaN(flexVal) || flexVal < 0 ? 1 : Math.min(8, Math.max(0, flexVal));
     if (benchEl && benchEl.value !== String(benchSpotsNum)) benchEl.value = benchSpotsNum;
     if (flexEl && flexEl.value !== String(flexSpotsNum)) flexEl.value = flexSpotsNum;
     const settings = {
@@ -984,7 +984,8 @@ function getAllowedPositionsForSlot(slotPosition) {
         TE: ['TE'],
         K: ['K', 'PK'],
         DEF: ['DEF', 'DST', 'D', 'DE', 'DT', 'NT', 'LB', 'S', 'CB'],
-        FLEX: ['QB', 'RB', 'WR', 'TE', 'K']
+        FLEX: ['QB', 'RB', 'WR', 'TE', 'K'],
+        SUPER_FLEX: ['QB', 'RB', 'WR', 'TE', 'K']
     };
     return map[slot] || [];
 }
@@ -992,7 +993,7 @@ function getAllowedPositionsForSlot(slotPosition) {
 function isPlayerPositionAllowedForSlot(playerPosition, slotPosition) {
     if (!slotPosition) return true;
     const slot = (slotPosition || '').toUpperCase();
-    if (slot === 'FLEX') return true; // FLEX accepts all positions
+    if (slot === 'FLEX' || slot === 'SUPER_FLEX') return true; // flex slots: any skill (superflex includes QB)
     const allowed = getAllowedPositionsForSlot(slot);
     const pos = (playerPosition || '').toUpperCase();
     if (!pos) return false;
@@ -1388,25 +1389,25 @@ function updateTradeAnalysis() {
     let receivingValue = 0;
     
     givingPlayers.forEach(player => {
-        const rating = parseFloat(player.querySelector('.player-rating').textContent);
-        givingValue += rating;
+        const rating = parseFloat(player.querySelector('.player-rating')?.textContent || '0');
+        givingValue += Number.isNaN(rating) ? 0 : rating;
     });
     
     receivingPlayers.forEach(player => {
-        const rating = parseFloat(player.querySelector('.player-rating').textContent);
-        receivingValue += rating;
+        const rating = parseFloat(player.querySelector('.player-rating')?.textContent || '0');
+        receivingValue += Number.isNaN(rating) ? 0 : rating;
     });
     
     const tradeValue = receivingValue - givingValue;
     const fairness = Math.abs(tradeValue) < 5 ? 'Fair' : tradeValue > 0 ? 'Favorable' : 'Unfavorable';
     
-    document.getElementById('tradeValue').textContent = tradeValue.toFixed(1);
-    document.getElementById('fairness').textContent = fairness;
-    
-    // Update fairness color
-    const fairnessElement = document.getElementById('fairness');
-    fairnessElement.style.color = fairness === 'Fair' ? '#00d4aa' : 
-                                 fairness === 'Favorable' ? '#4a9eff' : '#ff4757';
+    const tradeValueEl = document.getElementById('tradeValue');
+    const fairnessEl = document.getElementById('fairness');
+    if (tradeValueEl) tradeValueEl.textContent = tradeValue.toFixed(1);
+    if (fairnessEl) {
+        fairnessEl.textContent = fairness;
+        fairnessEl.style.color = fairness === 'Fair' ? '#00d4aa' : fairness === 'Favorable' ? '#4a9eff' : '#ff4757';
+    }
 }
 
 async function analyzeTrade() {
@@ -1456,13 +1457,20 @@ async function analyzeTrade() {
                 aiResult = await apiController.analyzeTradeWithOpenAI(giving, receiving);
             } catch (err) {
                 console.error('AI trade analysis failed, falling back to local analysis only:', err);
+                const msg = (err && err.message) || String(err);
+                showNotification(`AI analysis: ${msg}`, 'warning');
             }
         }
 
-        showTradeAnalysisModal({
-            ...baseAnalysis,
-            ai: aiResult
-        });
+        try {
+            showTradeAnalysisModal({
+                ...baseAnalysis,
+                ai: aiResult
+            });
+        } catch (err) {
+            console.error('Could not show trade results:', err);
+            showNotification('Could not show the analysis window. See console for details.', 'warning');
+        }
     } finally {
         if (analyzeBtn) {
             analyzeBtn.disabled = false;
@@ -1479,13 +1487,13 @@ function performTradeAnalysis(givingPlayers, receivingPlayers) {
     let receivingCount = receivingPlayers.length;
     
     givingPlayers.forEach(player => {
-        const rating = parseFloat(player.querySelector('.player-rating').textContent);
-        givingValue += rating;
+        const rating = parseFloat(player.querySelector('.player-rating')?.textContent || '0');
+        if (!Number.isNaN(rating)) givingValue += rating;
     });
     
     receivingPlayers.forEach(player => {
-        const rating = parseFloat(player.querySelector('.player-rating').textContent);
-        receivingValue += rating;
+        const rating = parseFloat(player.querySelector('.player-rating')?.textContent || '0');
+        if (!Number.isNaN(rating)) receivingValue += rating;
     });
     
     const netValue = receivingValue - givingValue;
@@ -1519,29 +1527,35 @@ function showTradeAnalysisModal(analysis) {
     const modal = document.createElement('div');
     modal.className = 'analysis-modal';
     const ai = analysis.ai || null;
-    const fairnessLabel = (ai && ai.fairness) || analysis.fairness;
-    const recommendationText = (ai && ai.summary) || analysis.recommendation;
+    const fairnessRaw = (ai && ai.fairness != null && ai.fairness !== '') ? ai.fairness : analysis.fairness;
+    const fairnessLabel = String(fairnessRaw != null ? fairnessRaw : 'Fair');
+    const fl = fairnessLabel.trim().toLowerCase();
+    const fairnessClass = ['fair', 'favorable', 'unfavorable'].includes(fl) ? fl : 'fair';
+    const summaryFromAi = ai && typeof ai.summary === 'string' && ai.summary.length > 0;
+    const recommendationText = summaryFromAi ? ai.summary : (analysis.recommendation || '');
     const aiGrade = ai && typeof ai.grade === 'number' ? ai.grade.toFixed(1) : null;
-    const netValueNumeric = parseFloat(analysis.netValue);
+    const netValueNumeric = parseFloat(String(analysis.netValue));
+    const netDisplay = (analysis && analysis.netValue != null) ? String(analysis.netValue) : '0.0';
+    const sign = !Number.isNaN(netValueNumeric) && netValueNumeric > 0 ? '+' : '';
     modal.innerHTML = `
         <div class="modal-content">
             <h3>Trade Analysis Results</h3>
             <div class="analysis-results">
                 <div class="result-item">
                     <span class="label">Net Value:</span>
-                    <span class="value ${netValueNumeric > 0 ? 'positive' : 'negative'}">${netValueNumeric > 0 ? '+' : ''}${analysis.netValue}</span>
+                    <span class="value ${!Number.isNaN(netValueNumeric) && netValueNumeric > 0 ? 'positive' : 'negative'}">${sign}${netDisplay}</span>
                 </div>
                 <div class="result-item">
                     <span class="label">Your Average:</span>
-                    <span class="value">${analysis.avgGiving}</span>
+                    <span class="value">${String(analysis.avgGiving != null ? analysis.avgGiving : '')}</span>
                 </div>
                 <div class="result-item">
                     <span class="label">Their Average:</span>
-                    <span class="value">${analysis.avgReceiving}</span>
+                    <span class="value">${String(analysis.avgReceiving != null ? analysis.avgReceiving : '')}</span>
                 </div>
                 <div class="result-item">
                     <span class="label">Fairness:</span>
-                    <span class="value ${fairnessLabel.toLowerCase()}">${fairnessLabel}</span>
+                    <span class="value ${fairnessClass}">${fairnessLabel}</span>
                 </div>
                 ${aiGrade !== null ? `
                 <div class="result-item">
@@ -1550,12 +1564,16 @@ function showTradeAnalysisModal(analysis) {
                 </div>` : ''}
             </div>
             <div class="recommendation">
-                <h4>${ai ? 'AI Recommendation:' : 'Recommendation:'}</h4>
-                <p>${recommendationText}</p>
+                <h4 class="recommendation-heading"></h4>
+                <p class="recommendation-body"></p>
             </div>
             <button class="close-modal">Close</button>
         </div>
     `;
+    const h4 = modal.querySelector('.recommendation-heading');
+    const p = modal.querySelector('.recommendation-body');
+    if (h4) h4.textContent = ai ? 'AI Recommendation:' : 'Recommendation:';
+    if (p) p.textContent = recommendationText;
     
     // Add modal styles
     const style = document.createElement('style');
@@ -1570,7 +1588,7 @@ function showTradeAnalysisModal(analysis) {
             display: flex;
             justify-content: center;
             align-items: center;
-            z-index: 1000;
+            z-index: 10050;
         }
         .analysis-modal .modal-content {
             background: #1a1a2e;
@@ -1714,7 +1732,7 @@ async function analyzeTeam() {
             showNotification('OpenAI API key is required for team analysis.', 'warning');
             return;
         }
-        showTeamAnalysisModal(result);
+        showTeamAnalysisResult(result);
     } finally {
         if (btn) {
             btn.disabled = false;
@@ -1723,51 +1741,98 @@ async function analyzeTeam() {
     }
 }
 
-function showTeamAnalysisModal(result) {
-    const modal = document.createElement('div');
-    modal.className = 'analysis-modal team-analysis-modal';
-    const section = (title, text) =>
-        text
-            ? `
-        <div class="team-analysis-section">
-            <h4>${title}</h4>
-            <p>${text.replace(/\n/g, '<br>')}</p>
-        </div>`
-            : '';
-    modal.innerHTML = `
-        <div class="modal-content">
-            <h3><i class="fas fa-chart-pie"></i> Team Analysis</h3>
-            <div class="team-analysis-body">
-                ${section('Where your team is strong', result.strengths)}
-                ${section('Where you need help', result.needsHelp)}
-                ${section('Trade targets', result.tradeTargets)}
-                ${section('Players to consider trading away', result.tradeAway)}
-                ${section('Drop candidates', result.dropCandidates)}
-            </div>
-            <button class="close-modal">Close</button>
-        </div>
-    `;
-    const style = document.createElement('style');
-    style.textContent = `
-        .team-analysis-modal .modal-content { max-width: 560px; text-align: left; }
-        .team-analysis-modal h3 { color: #4a9eff; margin-bottom: 20px; display: flex; align-items: center; gap: 10px; }
-        .team-analysis-body { max-height: 60vh; overflow-y: auto; margin-bottom: 20px; }
-        .team-analysis-section { margin-bottom: 18px; padding: 12px 16px; background: rgba(74, 158, 255, 0.08); border-radius: 10px; border-left: 4px solid #4a9eff; }
-        .team-analysis-section h4 { color: #4a9eff; margin: 0 0 8px 0; font-size: 1rem; }
-        .team-analysis-section p { color: #b0b0b0; margin: 0; line-height: 1.5; font-size: 0.95rem; }
-        .team-analysis-modal .close-modal { width: 100%; }
-    `;
-    document.head.appendChild(style);
-    document.body.appendChild(modal);
-    modal.querySelector('.close-modal').addEventListener('click', () => {
-        document.body.removeChild(modal);
-        document.head.removeChild(style);
-    });
-    modal.addEventListener('click', (e) => {
-        if (e.target === modal) {
-            document.body.removeChild(modal);
-            document.head.removeChild(style);
+function showTeamAnalysisResult(result) {
+    const container = document.getElementById('teamAnalysisResponse');
+    if (!container) return;
+
+    const normalizeItems = (value) => {
+        if (Array.isArray(value)) {
+            return value.map(item => String(item || '').trim()).filter(Boolean);
         }
+        const text = String(value || '').trim();
+        if (!text) return [];
+        return text
+            .split(/\n+|,\s+(?=[A-Z0-9])|;\s+|\.\s+(?=[A-Z])/)
+            .map(item => item.trim().replace(/\.$/, ''))
+            .filter(Boolean);
+    };
+
+    const sections = [
+        ['Team Strengths', normalizeItems(result.strengths)],
+        ['Team Weaknesses', normalizeItems(result.weaknesses || result.needsHelp)],
+        ['Trade Targets', normalizeItems(result.tradeTargets)],
+        ['Players to Trade Away', normalizeItems(result.tradeAway)],
+        ['Drop Candidates', normalizeItems(result.dropCandidates)]
+    ].filter(([, items]) => items.length > 0);
+    const overallSummary = String(result.overallSummary || '').trim();
+    const nextActions = normalizeItems(result.nextActions);
+
+    container.hidden = false;
+    container.innerHTML = `
+        <div class="team-analysis-response-header">
+            <i class="fas fa-chart-pie"></i>
+            <h3>Team Analysis</h3>
+        </div>
+        <div class="team-analysis-response-body"></div>
+    `;
+
+    const body = container.querySelector('.team-analysis-response-body');
+    sections.forEach(([title, items]) => {
+        const section = document.createElement('div');
+        section.className = 'team-analysis-response-section';
+
+        const heading = document.createElement('h4');
+        heading.textContent = title;
+
+        const list = document.createElement('ul');
+        list.className = 'team-analysis-response-list';
+        items.forEach((item) => {
+            const entry = document.createElement('li');
+            entry.textContent = item;
+            list.appendChild(entry);
+        });
+
+        section.appendChild(heading);
+        section.appendChild(list);
+        body.appendChild(section);
+    });
+
+    if (overallSummary || nextActions.length > 0) {
+        const summary = document.createElement('div');
+        summary.className = 'team-analysis-summary';
+
+        const heading = document.createElement('h4');
+        heading.textContent = 'Overall team summary';
+
+        summary.appendChild(heading);
+
+        if (overallSummary) {
+            const content = document.createElement('p');
+            content.className = 'team-analysis-summary-overview';
+            content.textContent = overallSummary;
+            summary.appendChild(content);
+        }
+
+        if (nextActions.length > 0) {
+            const actionsTitle = document.createElement('h5');
+            actionsTitle.className = 'team-analysis-summary-actions-title';
+            actionsTitle.textContent = 'What to do next';
+            const actionsList = document.createElement('ul');
+            actionsList.className = 'team-analysis-summary-actions';
+            nextActions.forEach((line) => {
+                const li = document.createElement('li');
+                li.textContent = line;
+                actionsList.appendChild(li);
+            });
+            summary.appendChild(actionsTitle);
+            summary.appendChild(actionsList);
+        }
+
+        body.appendChild(summary);
+    }
+
+    requestAnimationFrame(() => {
+        container.scrollIntoView({ behavior: 'smooth', block: 'start' });
     });
 }
 

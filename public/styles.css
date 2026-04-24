@@ -840,6 +840,109 @@ input:checked + .slider:before {
     cursor: not-allowed;
 }
 
+.team-analysis-response {
+    margin-top: 20px;
+    text-align: left;
+    background: rgba(74, 158, 255, 0.08);
+    border: 1px solid rgba(74, 158, 255, 0.2);
+    border-radius: 16px;
+    padding: 22px;
+    box-shadow: 0 12px 28px rgba(0, 0, 0, 0.2);
+}
+
+.team-analysis-response[hidden] {
+    display: none;
+}
+
+.team-analysis-response-header {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    color: #4a9eff;
+    margin-bottom: 16px;
+    font-size: 1.15rem;
+}
+
+.team-analysis-response-header h3 {
+    font-size: 1.2rem;
+}
+
+.team-analysis-response-body {
+    display: grid;
+    gap: 16px;
+}
+
+.team-analysis-response-section {
+    background: rgba(74, 158, 255, 0.06);
+    border: 1px solid rgba(74, 158, 255, 0.14);
+    border-radius: 14px;
+    padding: 16px 18px;
+}
+
+.team-analysis-response-section h4 {
+    color: #4a9eff;
+    margin-bottom: 12px;
+    font-size: 1rem;
+    letter-spacing: 0.01em;
+}
+
+.team-analysis-response-list {
+    margin: 0;
+    padding-left: 18px;
+    display: grid;
+    gap: 10px;
+}
+
+.team-analysis-response-list li {
+    color: #b0b0b0;
+    line-height: 1.6;
+}
+
+.team-analysis-summary {
+    background: linear-gradient(135deg, rgba(74, 158, 255, 0.12), rgba(107, 182, 255, 0.06));
+    border: 1px solid rgba(107, 182, 255, 0.22);
+    border-radius: 14px;
+    padding: 18px;
+}
+
+.team-analysis-summary h4 {
+    color: #ffffff;
+    margin-bottom: 10px;
+    font-size: 1rem;
+}
+
+.team-analysis-summary p {
+    color: #d5def5;
+    line-height: 1.7;
+    white-space: pre-line;
+}
+
+.team-analysis-summary-overview {
+    margin: 0 0 1rem 0;
+}
+
+.team-analysis-summary-actions-title {
+    color: #b8c5e6;
+    font-size: 0.85rem;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    margin: 0 0 0.65rem 0;
+    font-weight: 600;
+}
+
+.team-analysis-summary-actions {
+    margin: 0;
+    padding-left: 1.1rem;
+    display: grid;
+    gap: 0.5rem;
+}
+
+.team-analysis-summary-actions li {
+    color: #d5def5;
+    line-height: 1.5;
+    padding-left: 0.15rem;
+}
+
 .trade-analysis {
     text-align: center;
 }

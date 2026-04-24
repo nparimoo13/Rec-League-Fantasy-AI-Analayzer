@@ -6,7 +6,7 @@ class FantasyAPIController {
         this.baseURL = 'https://api.sleeper.app/v1';
         this.userData = null;
         this.leagueData = null;
-        this.openAIModel = 'gpt-4o-mini';
+        this.openAIModel = 'gpt-5.4-nano';
     }
 
     // Sleeper API Methods
@@ -349,6 +349,32 @@ class FantasyAPIController {
                 ppr: pprType,
                 scoringSettings: scoringSettings
             });
+
+            const s = this.leagueData.settings || {};
+            const flexEl = document.getElementById('flexSpots');
+            const benchEl = document.getElementById('benchSpots');
+            const superflexEl = document.getElementById('superflex');
+            if (flexEl && s.flex_spots != null) {
+                const n = Math.min(8, Math.max(0, parseInt(s.flex_spots, 10)));
+                if (!isNaN(n)) flexEl.value = n;
+            }
+            if (benchEl && s.bench_spots != null) {
+                const n = Math.min(10, Math.max(0, parseInt(s.bench_spots, 10)));
+                if (!isNaN(n)) benchEl.value = n;
+            }
+            if (superflexEl && s.super_flex_spots != null) {
+                superflexEl.checked = parseInt(s.super_flex_spots, 10) > 0;
+            }
+            try {
+                const settings = {
+                    scoringFormat: document.getElementById('scoringFormat')?.value,
+                    leagueType: document.getElementById('leagueType')?.value,
+                    superflex: superflexEl ? superflexEl.checked : false,
+                    benchSpots: benchEl ? parseInt(benchEl.value, 10) : 6,
+                    flexSpots: flexEl ? parseInt(flexEl.value, 10) : 1
+                };
+                if (settings.scoringFormat) localStorage.setItem('leagueSettings', JSON.stringify(settings));
+            } catch (e) {}
             
         } catch (error) {
             console.error('Error updating UI with league data:', error);
@@ -600,6 +626,41 @@ class FantasyAPIController {
         }
     }
 
+    /** Sleeper: roster_positions order matches roster.starters order (starting slots only; bench follows). */
+    static isSleeperBenchPosition(pos) {
+        const u = String(pos || '').toUpperCase();
+        return u === 'BN' || u === 'IR' || u === 'IR+' || u === 'RESERVE' || u === 'TAXI';
+    }
+
+    /** Starting slots only: roster rows before the first bench slot (order matches roster.starters). */
+    static getSleeperStartingSlotList(rosterPositions) {
+        if (!Array.isArray(rosterPositions) || rosterPositions.length === 0) return [];
+        const firstBn = rosterPositions.findIndex(p => String(p).toUpperCase() === 'BN');
+        return firstBn === -1 ? [...rosterPositions] : rosterPositions.slice(0, firstBn);
+    }
+
+    /** Map Sleeper slot codes to UI / validation keys (FLEX vs SUPER_FLEX are separate groups). */
+    static normalizeSleeperSlotKey(raw) {
+        const u = String(raw || '').toUpperCase();
+        if (u === 'REC_FLEX' || u === 'WRRB_FLEX' || u === 'R_FLEX') return 'FLEX';
+        return u;
+    }
+
+    static isSleeperRegularFlexSlot(raw) {
+        const k = FantasyAPIController.normalizeSleeperSlotKey(raw);
+        return k === 'FLEX';
+    }
+
+    static slotKeyToDisplayName(key) {
+        const u = String(key || '').toUpperCase();
+        if (u === 'SUPER_FLEX') return 'Superflex';
+        if (u === 'FLEX') return 'FLEX';
+        return u;
+    }
+
+    /** Preferred section order for starting lineup (unknown IDP etc. appended after). */
+    static SLEEPER_LINEUP_GROUP_ORDER = ['QB', 'RB', 'WR', 'TE', 'FLEX', 'SUPER_FLEX', 'K', 'DEF', 'DL', 'LB', 'DB'];
+
     async selectLeague(selectedLeague) {
         try {
             showNotification(`Loading ${selectedLeague.name}...`, 'info');
@@ -608,8 +669,11 @@ class FantasyAPIController {
                 this.leagueData.settings = this.leagueData.settings || {};
                 const benchCount = selectedLeague.roster_positions.filter(p => String(p).toUpperCase() === 'BN').length;
                 if (benchCount > 0) this.leagueData.settings.bench_spots = benchCount;
-                const flexCount = selectedLeague.roster_positions.filter(p => String(p).toUpperCase() === 'FLEX').length;
-                if (flexCount > 0) this.leagueData.settings.flex_spots = Math.min(4, flexCount);
+                const startSlots = FantasyAPIController.getSleeperStartingSlotList(selectedLeague.roster_positions);
+                const flexN = startSlots.filter(p => FantasyAPIController.isSleeperRegularFlexSlot(p)).length;
+                const superFN = startSlots.filter(p => String(p).toUpperCase() === 'SUPER_FLEX').length;
+                this.leagueData.settings.flex_spots = flexN;
+                this.leagueData.settings.super_flex_spots = superFN;
             }
             // Get league rosters and users
             const [rosters, users] = await Promise.all([
@@ -673,45 +737,104 @@ class FantasyAPIController {
     }
 
     updateTeamDisplayWithRoster(roster) {
-        // Clear existing team content
         const lineupSection = document.querySelector('.lineup-section');
         const benchSection = document.querySelector('.bench-section');
         
         if (lineupSection) {
             lineupSection.innerHTML = '<h3>Starting Lineup</h3>';
         }
-        
         if (benchSection) {
             benchSection.innerHTML = '<h3>Bench</h3>';
         }
 
-        // Define position groups and their requirements (flex count from settings)
+        const rosterPlayers = this.getRosterPlayers(roster);
+        const leaguePos = this.leagueData && this.leagueData.roster_positions;
+        const starters = roster && Array.isArray(roster.starters) ? roster.starters : [];
+
+        if (leaguePos && starters.length > 0) {
+            let startSlots = FantasyAPIController.getSleeperStartingSlotList(leaguePos);
+            if (startSlots.length !== starters.length) {
+                const alt = leaguePos.filter(p => !FantasyAPIController.isSleeperBenchPosition(p));
+                if (alt.length === starters.length) startSlots = alt;
+            }
+            if (startSlots.length === starters.length && this.updateTeamDisplayFromSleeperSlots(roster, startSlots, rosterPlayers)) {
+                this.finishLineupUpdate(rosterPlayers);
+                return;
+            }
+        }
+
         const flexCount = this.getFlexSpots();
+        const superFlexCount = this.getSuperFlexSpots();
         const positionGroups = {
             'QB': { count: 1, container: 'lineup-section' },
             'RB': { count: 2, container: 'lineup-section' },
             'WR': { count: 2, container: 'lineup-section' },
             'TE': { count: 1, container: 'lineup-section' },
             'FLEX': { count: flexCount, container: 'lineup-section' },
+            ...(superFlexCount > 0 ? { SUPER_FLEX: { count: superFlexCount, container: 'lineup-section' } } : {}),
             'K': { count: 1, container: 'lineup-section' },
             'DEF': { count: 1, container: 'lineup-section' }
         };
 
-        // Process roster players
-        const rosterPlayers = this.getRosterPlayers(roster);
-        
-        // Group players by position
         const playersByPosition = this.groupPlayersByPosition(rosterPlayers);
-        
-        // Create position groups
-        Object.entries(positionGroups).forEach(([position, config]) => {
-            this.createPositionGroup(position, config, playersByPosition[position] || []);
+        Object.keys(positionGroups).forEach((position) => {
+            this.createPositionGroup(
+                position,
+                positionGroups[position],
+                playersByPosition[position] || []
+            );
         });
 
-        // Add bench players
-        this.createBenchSection(rosterPlayers);
+        this.finishLineupUpdate(rosterPlayers);
+    }
 
-        // Update overall team rating based on current lineup
+    /**
+     * Maps Sleeper roster.starters to roster slot types so FLEX/SUPER_FLEX get the right players
+     * (not just "all RBs" into the RB group).
+     */
+    updateTeamDisplayFromSleeperSlots(roster, startSlots, rosterPlayers) {
+        const starters = roster.starters;
+        if (!this.playersData || !Array.isArray(starters) || startSlots.length !== starters.length) return false;
+
+        const toPlayer = (playerId) => {
+            if (!playerId || playerId === '0' || !this.playersData[playerId]) return null;
+            const player = this.playersData[playerId];
+            const displayName = this.getPlayerDisplayName(player);
+            return { ...player, full_name: player.full_name || displayName, player_id: playerId, isStarter: true };
+        };
+
+        const byKey = {};
+        startSlots.forEach((raw, i) => {
+            const key = FantasyAPIController.normalizeSleeperSlotKey(raw);
+            if (!byKey[key]) byKey[key] = [];
+            byKey[key].push(toPlayer(starters[i]));
+        });
+
+        const order = [];
+        const orderRef = FantasyAPIController.SLEEPER_LINEUP_GROUP_ORDER;
+        orderRef.forEach((k) => {
+            if (byKey[k] && byKey[k].length) order.push(k);
+        });
+        Object.keys(byKey).forEach((k) => {
+            if (!orderRef.includes(k) && byKey[k].length) order.push(k);
+        });
+
+        order.forEach((key) => {
+            const players = byKey[key] || [];
+            const displayName = FantasyAPIController.slotKeyToDisplayName(key);
+            this.createPositionGroup(
+                key,
+                { count: players.length, container: 'lineup-section' },
+                players,
+                displayName
+            );
+        });
+
+        return true;
+    }
+
+    finishLineupUpdate(rosterPlayers) {
+        if (rosterPlayers) this.createBenchSection(rosterPlayers);
         if (typeof updateTeamOverallRating === 'function') {
             try {
                 updateTeamOverallRating();
@@ -778,28 +901,32 @@ class FantasyAPIController {
         return groups;
     }
 
-    createPositionGroup(position, config, players) {
+    createPositionGroup(position, config, players, displayName) {
         const container = document.querySelector(`.${config.container}`);
         if (!container) return;
 
         const positionGroup = document.createElement('div');
         positionGroup.className = 'position-group';
+        const slotKey = String(position);
+        positionGroup.setAttribute('data-lineup-slot', slotKey);
         
         const positionHeader = document.createElement('h4');
-        positionHeader.textContent = position;
+        positionHeader.textContent = displayName != null && displayName !== '' ? displayName : position;
         positionGroup.appendChild(positionHeader);
-
-        // Add existing players
-        players.slice(0, config.count).forEach(player => {
-            const playerCard = this.createPlayerCard(player, position, false);
-            positionGroup.appendChild(playerCard);
-        });
-
-        // Add placeholder buttons for empty slots
-        const emptySlots = config.count - players.length;
+        const list = (players || []).slice(0, config.count);
+        const addLabel = displayName != null && displayName !== slotKey ? displayName : null;
+        for (let i = 0; i < list.length; i++) {
+            const player = list[i];
+            if (player) {
+                const playerCard = this.createPlayerCard(player, slotKey, false);
+                positionGroup.appendChild(playerCard);
+            } else {
+                positionGroup.appendChild(this.createPlayerPlaceholder(slotKey, addLabel));
+            }
+        }
+        const emptySlots = config.count - list.length;
         for (let i = 0; i < emptySlots; i++) {
-            const placeholder = this.createPlayerPlaceholder(position);
-            positionGroup.appendChild(placeholder);
+            positionGroup.appendChild(this.createPlayerPlaceholder(slotKey, addLabel));
         }
 
         container.appendChild(positionGroup);
@@ -937,7 +1064,7 @@ class FantasyAPIController {
     getFlexSpots() {
         if (this.leagueData && this.leagueData.settings && this.leagueData.settings.flex_spots != null) {
             const n = parseInt(this.leagueData.settings.flex_spots, 10);
-            if (!isNaN(n) && n >= 0) return Math.min(4, Math.max(0, n));
+            if (!isNaN(n) && n >= 0) return Math.min(8, Math.max(0, n));
         }
         try {
             const saved = typeof localStorage !== 'undefined' && localStorage.getItem('leagueSettings');
@@ -945,14 +1072,24 @@ class FantasyAPIController {
                 const parsed = JSON.parse(saved);
                 if (parsed.flexSpots != null) {
                     const n = parseInt(parsed.flexSpots, 10);
-                    if (!isNaN(n) && n >= 0) return Math.min(4, Math.max(0, n));
+                    if (!isNaN(n) && n >= 0) return Math.min(8, Math.max(0, n));
                 }
             }
         } catch (e) {}
         return 1;
     }
 
-    createPlayerPlaceholder(position) {
+    getSuperFlexSpots() {
+        if (this.leagueData && this.leagueData.settings && this.leagueData.settings.super_flex_spots != null) {
+            const n = parseInt(this.leagueData.settings.super_flex_spots, 10);
+            if (!isNaN(n) && n >= 0) return Math.min(4, Math.max(0, n));
+        }
+        return 0;
+    }
+
+    createPlayerPlaceholder(position, labelForTitle) {
+        const slot = String(position);
+        const title = labelForTitle != null && labelForTitle !== '' ? labelForTitle : slot;
         const placeholder = document.createElement('div');
         placeholder.className = 'player-card placeholder';
         
@@ -961,16 +1098,15 @@ class FantasyAPIController {
                 <div class="placeholder-icon">+</div>
             </div>
             <div class="player-info">
-                <h5>Add ${position}</h5>
+                <h5>Add ${title}</h5>
                 <p class="position">Click to add player</p>
                 <div class="rating">--</div>
             </div>
         `;
         
-        // Add click handler for adding players via global modal tied to lineup
         placeholder.addEventListener('click', () => {
             if (typeof showGlobalAddPlayerModal === 'function') {
-                showGlobalAddPlayerModal({ mode: 'lineup', position });
+                showGlobalAddPlayerModal({ mode: 'lineup', position: slot });
             }
         });
         
@@ -1024,12 +1160,19 @@ class FantasyAPIController {
             if (newKey && existingKey && newKey === existingKey) return 'duplicate';
         }
         // Find the first placeholder in the requested position group and replace it
+        const wantSlot = String(position || '').toUpperCase();
         const groups = document.querySelectorAll('.lineup-section .position-group');
         for (let i = 0; i < groups.length; i++) {
-            const header = groups[i].querySelector('h4');
-            if (!header) continue;
-            if (header.textContent.trim().toUpperCase() !== String(position).toUpperCase()) continue;
-            const placeholder = groups[i].querySelector('.player-card.placeholder');
+            const g = groups[i];
+            const dataSlot = (g.getAttribute('data-lineup-slot') || '').toUpperCase();
+            if (dataSlot) {
+                if (dataSlot !== wantSlot) continue;
+            } else {
+                const header = g.querySelector('h4');
+                if (!header) continue;
+                if (header.textContent.trim().toUpperCase() !== wantSlot) continue;
+            }
+            const placeholder = g.querySelector('.player-card.placeholder');
             if (placeholder) {
                 const card = this.createPlayerCard({
                     full_name: playerData.full_name,
@@ -1039,7 +1182,7 @@ class FantasyAPIController {
                     player_id: playerData.player_id,
                     image: playerData.image
                 }, position, false);
-                groups[i].replaceChild(card, placeholder);
+                g.replaceChild(card, placeholder);
                 if (typeof updateTeamOverallRating === 'function') {
                     try {
                         updateTeamOverallRating();
@@ -1087,6 +1230,8 @@ class FantasyAPIController {
     createBenchSection(rosterPlayers) {
         const benchSection = document.querySelector('.bench-section');
         if (!benchSection) return;
+        const old = benchSection.querySelector('.bench-players');
+        if (old) old.remove();
         const benchList = rosterPlayers.filter(player => !player.isStarter);
         const benchSize = this.getBenchSize();
         const benchContainer = document.createElement('div');
@@ -1165,26 +1310,32 @@ class FantasyAPIController {
 
     createEmptyPositionGroups(container) {
         const flexCount = this.getFlexSpots();
+        const superFlexCount = this.getSuperFlexSpots();
         const positions = [
-            { name: 'QB', count: 1 },
-            { name: 'RB', count: 2 },
-            { name: 'WR', count: 2 },
-            { name: 'TE', count: 1 },
-            { name: 'FLEX', count: flexCount },
-            { name: 'K', count: 1 },
-            { name: 'DEF', count: 1 }
+            { name: 'QB', count: 1, label: 'QB' },
+            { name: 'RB', count: 2, label: 'RB' },
+            { name: 'WR', count: 2, label: 'WR' },
+            { name: 'TE', count: 1, label: 'TE' },
+            { name: 'FLEX', count: flexCount, label: 'FLEX' },
+            ...(superFlexCount > 0 ? [{ name: 'SUPER_FLEX', count: superFlexCount, label: 'Superflex' }] : []),
+            { name: 'K', count: 1, label: 'K' },
+            { name: 'DEF', count: 1, label: 'DEF' }
         ];
 
         positions.forEach(pos => {
             const positionGroup = document.createElement('div');
             positionGroup.className = 'position-group';
+            positionGroup.setAttribute('data-lineup-slot', pos.name);
             
             const positionHeader = document.createElement('h4');
-            positionHeader.textContent = pos.name;
+            positionHeader.textContent = pos.label;
             positionGroup.appendChild(positionHeader);
 
             for (let i = 0; i < pos.count; i++) {
-                const placeholder = this.createPlayerPlaceholder(pos.name);
+                const placeholder = this.createPlayerPlaceholder(
+                    pos.name,
+                    pos.name === 'SUPER_FLEX' ? 'Superflex' : null
+                );
                 positionGroup.appendChild(placeholder);
             }
 
@@ -1197,241 +1348,66 @@ class FantasyAPIController {
         showNotification(`Add ${position} player functionality coming soon!`, 'info');
     }
 
-    // Trade analysis methods
-    getOpenAIBaseUrl() {
-        if (typeof window === 'undefined') return '';
-        return (window.APP_API_URL || '').replace(/\/$/, '');
-    }
-
-    getOpenAIApiKey() {
-        try {
-            let key = (typeof window !== 'undefined' && window.OPENAI_API_KEY) || localStorage.getItem('openai_api_key') || '';
-            if (!key && typeof window !== 'undefined') {
-                const entered = window.prompt(
-                    'Enter your OpenAI API key to enable AI-powered trade analysis. This key will be stored locally in your browser.'
-                );
-                if (entered && entered.trim()) {
-                    key = entered.trim();
-                    localStorage.setItem('openai_api_key', key);
+    /**
+     * AI runs only on the server; OPENAI_API_KEY or OPEN_API_KEY in .env (never the browser).
+     * window.APP_API_URL can override the API origin when the static site is on another host.
+     */
+    static async _postAnalyzeJson(path, body) {
+        if (typeof fetch === 'undefined') throw new Error('Network not available');
+        const base = (typeof window !== 'undefined' && window.APP_API_URL)
+            ? String(window.APP_API_URL).replace(/\/$/, '') + '/'
+            : '/';
+        const response = await fetch(base + path.replace(/^\//, ''), {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
+        });
+        const text = await response.text();
+        let data = {};
+        if (text) {
+            try {
+                data = JSON.parse(text);
+            } catch (e) {
+                if (!response.ok) {
+                    throw new Error(text || `Request failed (${response.status})`);
                 }
             }
-            return key;
-        } catch (e) {
-            console.error('Error retrieving OpenAI API key:', e);
-            return '';
         }
+        if (!response.ok) {
+            const err = (data && (data.error || data.message)) || text || `Request failed (${response.status})`;
+            throw new Error(err);
+        }
+        return data;
     }
 
     async analyzeTradeWithOpenAI(givingPlayers, receivingPlayers) {
-        const baseUrl = this.getOpenAIBaseUrl();
-        try {
-            const response = await fetch((baseUrl ? baseUrl + '/' : '') + 'api/analyze-trade', {
-                    method: 'POST',
-                    headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify({
-                        givingPlayers,
-                        receivingPlayers,
-                        model: this.openAIModel
-                    })
-                });
-            if (response.ok) {
-                const data = await response.json();
-                return {
-                    fairness: data.fairness || 'Fair',
-                    grade: typeof data.grade === 'number' ? data.grade : 50,
-                    summary: data.summary || ''
-                };
-            }
-        } catch (e) {
-            console.warn('Backend AI unavailable, falling back to client key:', e.message);
-        }
-        const apiKey = this.getOpenAIApiKey();
-        if (!apiKey) {
-            throw new Error('OpenAI API key is required for AI trade analysis. Use the server (see README) or enter your key when prompted.');
-        }
-
-        const payload = {
-            model: this.openAIModel,
-            temperature: 0.4,
-            messages: [
-                {
-                    role: 'system',
-                    content:
-                        'You are an expert fantasy football trade analyst. Given players involved in a trade, ' +
-                        "you evaluate it strictly from the perspective of the user's team. " +
-                        'Respond with concise, actionable insight.'
-                },
-                {
-                    role: 'user',
-                    content:
-                        'You are analyzing a fantasy football trade. ' +
-                        'The players my team is GIVING and RECEIVING are provided below as JSON. ' +
-                        'Each player has name, position, and a numeric rating (higher is better).\n\n' +
-                        'GIVING:\n' +
-                        JSON.stringify(givingPlayers, null, 2) +
-                        '\n\nRECEIVING:\n' +
-                        JSON.stringify(receivingPlayers, null, 2) +
-                        '\n\n' +
-                        'Return ONLY a JSON object (no extra text) with this shape:\n' +
-                        '{\n' +
-                        '  "fairness": "Favorable" | "Fair" | "Unfavorable",\n' +
-                        '  "grade": number, // 0-100 overall grade for MY side\n' +
-                        '  "summary": string // 2-4 short sentences of advice\n' +
-                        '}'
-                }
-            ]
-        };
-
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`
-            },
-            body: JSON.stringify(payload)
+        const data = await FantasyAPIController._postAnalyzeJson('api/analyze-trade', {
+            givingPlayers,
+            receivingPlayers,
+            model: this.openAIModel
         });
-
-        if (!response.ok) {
-            const text = await response.text().catch(() => '');
-            console.error('OpenAI API error response:', text);
-            throw new Error(`OpenAI API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const content =
-            (data &&
-                data.choices &&
-                data.choices[0] &&
-                data.choices[0].message &&
-                data.choices[0].message.content) ||
-            '';
-
-        if (!content) {
-            throw new Error('OpenAI returned an empty response for trade analysis.');
-        }
-
-        let parsed;
-        try {
-            parsed = JSON.parse(content);
-        } catch (e) {
-            console.warn('Failed to parse OpenAI JSON, using raw content as summary.', e);
-            parsed = {
-                fairness: 'Fair',
-                grade: 50,
-                summary: content
-            };
-        }
-
         return {
-            fairness: parsed.fairness || 'Fair',
-            grade: typeof parsed.grade === 'number' ? parsed.grade : 50,
-            summary: parsed.summary || ''
+            fairness: data.fairness || 'Fair',
+            grade: typeof data.grade === 'number' ? data.grade : 50,
+            summary: data.summary || ''
         };
     }
 
     async analyzeTeamWithOpenAI(lineupPlayers, benchPlayers) {
-        const baseUrl = this.getOpenAIBaseUrl();
-        try {
-            const response = await fetch((baseUrl ? baseUrl + '/' : '') + 'api/analyze-team', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    lineupPlayers,
-                    benchPlayers,
-                    model: this.openAIModel
-                })
-            });
-            if (response.ok) {
-                return await response.json();
-            }
-        } catch (e) {
-            console.warn('Backend AI unavailable, falling back to client key:', e.message);
-        }
-        const apiKey = this.getOpenAIApiKey();
-        if (!apiKey) {
-            throw new Error('OpenAI API key is required for AI team analysis. Use the server (see README) or enter your key when prompted.');
-        }
-
-        const payload = {
-            model: this.openAIModel,
-            temperature: 0.4,
-            messages: [
-                {
-                    role: 'system',
-                    content:
-                        'You are an expert fantasy football analyst. Given a starting lineup and bench, ' +
-                        'you provide actionable advice: strengths, weaknesses, trade targets, players to trade away, and drop candidates. ' +
-                        'Be specific with player names and positions. Respond with valid JSON only.'
-                },
-                {
-                    role: 'user',
-                    content:
-                        'Analyze this fantasy football roster.\n\n' +
-                        'STARTING LINEUP (with slot and rating):\n' +
-                        JSON.stringify(lineupPlayers, null, 2) +
-                        '\n\nBENCH:\n' +
-                        JSON.stringify(benchPlayers, null, 2) +
-                        '\n\nReturn ONLY a JSON object (no markdown, no extra text) with this exact shape:\n' +
-                        '{\n' +
-                        '  "strengths": "2-4 sentences on where this team is strong (positions, depth, etc.)",\n' +
-                        '  "needsHelp": "2-4 sentences on where the team is weak or could improve",\n' +
-                        '  "tradeTargets": "2-4 specific player types or positions to target (e.g. upgrade at RB2, add WR depth)",\n' +
-                        '  "tradeAway": "2-4 sentences on which players to consider trading away to improve the team",\n' +
-                        '  "dropCandidates": "2-4 sentences on bench players who could be dropped for waivers or upgrades"\n' +
-                        '}'
-                }
-            ]
-        };
-
-        const response = await fetch('https://api.openai.com/v1/chat/completions', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json',
-                Authorization: `Bearer ${apiKey}`
-            },
-            body: JSON.stringify(payload)
+        const data = await FantasyAPIController._postAnalyzeJson('api/analyze-team', {
+            lineupPlayers,
+            benchPlayers,
+            model: this.openAIModel
         });
-
-        if (!response.ok) {
-            const text = await response.text().catch(() => '');
-            console.error('OpenAI API error response:', text);
-            throw new Error(`OpenAI API error: ${response.status}`);
-        }
-
-        const data = await response.json();
-        const content =
-            (data &&
-                data.choices &&
-                data.choices[0] &&
-                data.choices[0].message &&
-                data.choices[0].message.content) ||
-            '';
-
-        if (!content) {
-            throw new Error('OpenAI returned an empty response for team analysis.');
-        }
-
-        const trimmed = content.replace(/^```json?\s*|\s*```$/g, '').trim();
-        let parsed;
-        try {
-            parsed = JSON.parse(trimmed);
-        } catch (e) {
-            console.warn('Failed to parse OpenAI team analysis JSON, using raw as summary.', e);
-            parsed = {
-                strengths: '',
-                needsHelp: content,
-                tradeTargets: '',
-                tradeAway: '',
-                dropCandidates: ''
-            };
-        }
-
         return {
-            strengths: parsed.strengths || '',
-            needsHelp: parsed.needsHelp || '',
-            tradeTargets: parsed.tradeTargets || '',
-            tradeAway: parsed.tradeAway || '',
-            dropCandidates: parsed.dropCandidates || ''
+            strengths: data.strengths ?? [],
+            weaknesses: data.weaknesses ?? data.needsHelp ?? [],
+            needsHelp: data.needsHelp ?? data.weaknesses ?? [],
+            tradeTargets: data.tradeTargets ?? [],
+            tradeAway: data.tradeAway ?? [],
+            dropCandidates: data.dropCandidates ?? [],
+            overallSummary: data.overallSummary || '',
+            nextActions: data.nextActions ?? []
         };
     }
 

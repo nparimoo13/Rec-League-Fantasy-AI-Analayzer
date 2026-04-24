@@ -2,7 +2,7 @@
  * Production backend: keeps your OpenAI API key on the server.
  * Users never see or enter a key; all AI requests go through this proxy.
  *
- * 1. Copy .env.example to .env and set OPENAI_API_KEY=sk-your-key
+ * 1. Copy .env.example to .env and set OPENAI_API_KEY=sk-your-key (or OPEN_API_KEY)
  * 2. Run: npm install && node server.js  (or: npx vercel dev)
  * 3. Open http://localhost:3000 (or your deployed URL)
  * Deploy: connect this repo to Vercel. Static files live in public/; the API is this Express app.
@@ -23,7 +23,7 @@ app.use(express.json());
 app.use(express.static(path.join(__dirname, 'public')));
 
 if (!OPENAI_API_KEY) {
-    console.warn('Warning: OPENAI_API_KEY is not set in .env. Analyze Trade and Analyze Team will return 503.');
+    console.warn('Warning: Set OPENAI_API_KEY or OPEN_API_KEY in .env. Analyze Trade and Analyze Team will return 503.');
 } else {
     console.log('OpenAI key loaded from .env — Analyze Trade & Analyze Team will use it.');
 }
@@ -42,6 +42,25 @@ async function callOpenAI(payload) {
         throw new Error(`OpenAI API error: ${response.status} - ${text}`);
     }
     return response.json();
+}
+
+function normalizeAnalysisList(value) {
+    if (Array.isArray(value)) {
+        return value.map(item => String(item || '').trim()).filter(Boolean);
+    }
+    const text = String(value || '').replace(/\r/g, '').trim();
+    if (!text) return [];
+
+    const bulletParts = text
+        .split(/\n+|(?:^|\s)[-*•]\s+/)
+        .map(part => part.trim())
+        .filter(Boolean);
+    if (bulletParts.length > 1) return bulletParts;
+
+    return text
+        .split(/,\s+(?=[A-Z0-9])|;\s+|\.\s+(?=[A-Z])/)
+        .map(part => part.trim().replace(/\.$/, ''))
+        .filter(Boolean);
 }
 
 app.post('/api/analyze-trade', async (req, res) => {
@@ -119,7 +138,22 @@ app.post('/api/analyze-team', async (req, res) => {
                         JSON.stringify(lineupPlayers || [], null, 2) +
                         '\n\nBENCH:\n' +
                         JSON.stringify(benchPlayers || [], null, 2) +
-                        '\n\nReturn ONLY a JSON object with: "strengths", "needsHelp", "tradeTargets", "tradeAway", "dropCandidates" (each a string).'
+                        '\n\nReturn ONLY a JSON object with this exact shape:\n' +
+                        '{\n' +
+                        '  "strengths": string[],\n' +
+                        '  "weaknesses": string[],\n' +
+                        '  "tradeTargets": string[],\n' +
+                        '  "tradeAway": string[],\n' +
+                        '  "dropCandidates": string[],\n' +
+                        '  "overallSummary": string,\n' +
+                        '  "nextActions": string[]\n' +
+                        '}\n\n' +
+                        'Rules:\n' +
+                        '- Each array (except the summary field) should contain 3 to 5 short, scannable bullet-style items, not paragraphs.\n' +
+                        '- Keep every item concise and specific.\n' +
+                        '- "overallSummary" must be 2 to 4 sentences: high-level roster overview (strength/weakness theme) in plain language.\n' +
+                        '- "nextActions" must be 3 to 6 short imperative items the manager should do this week (e.g. start/sit, waiver adds, trade talks, who to cut). No duplication of the bullet lists; focus on decisions and priorities.\n' +
+                        '- Return valid JSON only. No markdown, no code fences, no extra text.'
                 }
             ]
         };
@@ -129,14 +163,32 @@ app.post('/api/analyze-team', async (req, res) => {
         try {
             parsed = JSON.parse(content);
         } catch (e) {
-            parsed = { strengths: '', needsHelp: content, tradeTargets: '', tradeAway: '', dropCandidates: '' };
+            parsed = {
+                strengths: [],
+                weaknesses: [],
+                tradeTargets: [],
+                tradeAway: [],
+                dropCandidates: [],
+                overallSummary: String(content || '').trim(),
+                nextActions: []
+            };
         }
+        const strengths = normalizeAnalysisList(parsed.strengths);
+        const weaknesses = normalizeAnalysisList(parsed.weaknesses ?? parsed.needsHelp);
+        const tradeTargets = normalizeAnalysisList(parsed.tradeTargets);
+        const tradeAway = normalizeAnalysisList(parsed.tradeAway);
+        const dropCandidates = normalizeAnalysisList(parsed.dropCandidates);
+        const nextActions = normalizeAnalysisList(parsed.nextActions);
+        const overallSummary = String(parsed.overallSummary || '').trim();
         res.json({
-            strengths: parsed.strengths || '',
-            needsHelp: parsed.needsHelp || '',
-            tradeTargets: parsed.tradeTargets || '',
-            tradeAway: parsed.tradeAway || '',
-            dropCandidates: parsed.dropCandidates || ''
+            strengths,
+            weaknesses,
+            needsHelp: weaknesses,
+            tradeTargets,
+            tradeAway,
+            dropCandidates,
+            overallSummary,
+            nextActions
         });
     } catch (err) {
         console.error('analyze-team error:', err);
