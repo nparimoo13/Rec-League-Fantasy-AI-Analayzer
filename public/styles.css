@@ -943,6 +943,90 @@ input:checked + .slider:before {
     padding-left: 0.15rem;
 }
 
+.context-sources {
+    margin-top: 18px;
+    background: rgba(74, 158, 255, 0.06);
+    border: 1px solid rgba(74, 158, 255, 0.14);
+    border-radius: 12px;
+    padding: 14px 16px;
+    text-align: left;
+}
+
+.context-sources-header {
+    display: flex;
+    justify-content: space-between;
+    align-items: baseline;
+    gap: 12px;
+    margin-bottom: 8px;
+    color: #4a9eff;
+    font-size: 0.9rem;
+    font-weight: 600;
+    letter-spacing: 0.02em;
+}
+
+.context-sources-asof {
+    color: #8b9bc4;
+    font-weight: 500;
+    font-size: 0.78rem;
+}
+
+.context-sources-disclaimer {
+    color: #b0b0b0;
+    font-size: 0.82rem;
+    margin: 0 0 10px 0;
+    line-height: 1.5;
+}
+
+.context-sources-list {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: grid;
+    gap: 6px;
+}
+
+.context-sources-list li {
+    display: flex;
+    gap: 8px;
+    align-items: baseline;
+    font-size: 0.85rem;
+    line-height: 1.4;
+}
+
+.context-sources-kind {
+    flex: none;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    font-size: 0.65rem;
+    padding: 2px 6px;
+    border-radius: 4px;
+    background: rgba(74, 158, 255, 0.18);
+    color: #6bb6ff;
+}
+
+.context-sources-list a {
+    color: #d5def5;
+    text-decoration: none;
+    border-bottom: 1px dotted rgba(213, 222, 245, 0.4);
+}
+
+.context-sources-list a:hover {
+    color: #ffffff;
+    border-bottom-color: #ffffff;
+}
+
+.context-sources-date {
+    flex: none;
+    color: #8b9bc4;
+    font-size: 0.75rem;
+}
+
+.context-sources-empty {
+    color: #8b9bc4;
+    font-size: 0.82rem;
+    margin: 0;
+}
+
 .trade-analysis {
     text-align: center;
 }

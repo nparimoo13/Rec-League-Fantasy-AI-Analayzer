@@ -1,0 +1,20 @@
+{
+    "feeds": [
+        {
+            "name": "ESPN NFL",
+            "url": "https://www.espn.com/espn/rss/nfl/news"
+        },
+        {
+            "name": "CBS Sports NFL",
+            "url": "https://www.cbssports.com/rss/headlines/nfl/"
+        },
+        {
+            "name": "NBC Pro Football Talk",
+            "url": "https://profootballtalk.nbcsports.com/feed/"
+        },
+        {
+            "name": "Yahoo Sports NFL",
+            "url": "https://sports.yahoo.com/nfl/rss.xml"
+        }
+    ]
+}

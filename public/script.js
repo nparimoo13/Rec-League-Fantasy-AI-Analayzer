@@ -1523,6 +1523,48 @@ function getTradeRecommendation(netValue) {
     }
 }
 
+function escapeHtml(value) {
+    return String(value == null ? '' : value)
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#39;');
+}
+
+function formatAsOf(iso) {
+    if (!iso) return '';
+    const t = Date.parse(iso);
+    if (!Number.isFinite(t)) return '';
+    try {
+        return new Date(t).toLocaleString(undefined, { dateStyle: 'medium', timeStyle: 'short' });
+    } catch (_e) {
+        return new Date(t).toISOString().replace('T', ' ').slice(0, 16);
+    }
+}
+
+function renderContextSourcesHtml({ contextAsOf, sources, disclaimer }) {
+    const items = Array.isArray(sources) ? sources : [];
+    const asOfLabel = formatAsOf(contextAsOf);
+    const headerRight = asOfLabel ? `<span class="context-sources-asof">As of ${escapeHtml(asOfLabel)}</span>` : '';
+    const disclaimerHtml = disclaimer ? `<p class="context-sources-disclaimer">${escapeHtml(disclaimer)}</p>` : '';
+    const body = items.length === 0
+        ? '<p class="context-sources-empty">No external sources used for this analysis.</p>'
+        : `<ul class="context-sources-list">${items.slice(0, 12).map(src => {
+            const date = src.publishedAt ? formatAsOf(src.publishedAt) : '';
+            const kind = (src.kind || 'source').toLowerCase();
+            const title = src.title || src.url;
+            return `<li><span class="context-sources-kind">${escapeHtml(kind)}</span><a href="${escapeHtml(src.url)}" target="_blank" rel="noopener noreferrer">${escapeHtml(title)}</a>${date ? `<span class="context-sources-date">${escapeHtml(date)}</span>` : ''}</li>`;
+        }).join('')}</ul>`;
+    return `
+        <div class="context-sources">
+            <div class="context-sources-header"><span>Context &amp; sources</span>${headerRight}</div>
+            ${disclaimerHtml}
+            ${body}
+        </div>
+    `;
+}
+
 function showTradeAnalysisModal(analysis) {
     const modal = document.createElement('div');
     modal.className = 'analysis-modal';
@@ -1567,6 +1609,7 @@ function showTradeAnalysisModal(analysis) {
                 <h4 class="recommendation-heading"></h4>
                 <p class="recommendation-body"></p>
             </div>
+            ${ai ? renderContextSourcesHtml({ contextAsOf: ai.contextAsOf, sources: ai.sources, disclaimer: ai.disclaimer }) : ''}
             <button class="close-modal">Close</button>
         </div>
     `;
@@ -1830,6 +1873,13 @@ function showTeamAnalysisResult(result) {
 
         body.appendChild(summary);
     }
+
+    const sourcesHtml = renderContextSourcesHtml({
+        contextAsOf: result.contextAsOf,
+        sources: result.sources,
+        disclaimer: result.disclaimer
+    });
+    body.insertAdjacentHTML('beforeend', sourcesHtml);
 
     requestAnimationFrame(() => {
         container.scrollIntoView({ behavior: 'smooth', block: 'start' });

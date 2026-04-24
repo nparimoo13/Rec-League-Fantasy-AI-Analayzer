@@ -1389,7 +1389,10 @@ class FantasyAPIController {
         return {
             fairness: data.fairness || 'Fair',
             grade: typeof data.grade === 'number' ? data.grade : 50,
-            summary: data.summary || ''
+            summary: data.summary || '',
+            contextAsOf: data.contextAsOf || null,
+            sources: Array.isArray(data.sources) ? data.sources : [],
+            disclaimer: data.disclaimer || ''
         };
     }
 
@@ -1407,7 +1410,10 @@ class FantasyAPIController {
             tradeAway: data.tradeAway ?? [],
             dropCandidates: data.dropCandidates ?? [],
             overallSummary: data.overallSummary || '',
-            nextActions: data.nextActions ?? []
+            nextActions: data.nextActions ?? [],
+            contextAsOf: data.contextAsOf || null,
+            sources: Array.isArray(data.sources) ? data.sources : [],
+            disclaimer: data.disclaimer || ''
         };
     }
 

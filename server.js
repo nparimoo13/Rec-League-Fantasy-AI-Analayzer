@@ -11,6 +11,8 @@
 require('dotenv').config();
 const express = require('express');
 const path = require('path');
+const { buildContext, formatContextBlock } = require('./lib/context');
+const rss = require('./lib/context/rss');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -26,6 +28,20 @@ if (!OPENAI_API_KEY) {
     console.warn('Warning: Set OPENAI_API_KEY or OPEN_API_KEY in .env. Analyze Trade and Analyze Team will return 503.');
 } else {
     console.log('OpenAI key loaded from .env — Analyze Trade & Analyze Team will use it.');
+}
+
+async function buildContextSafely(players) {
+    try {
+        return await buildContext(players);
+    } catch (e) {
+        console.warn('context: build failed, continuing without it:', e.message);
+        return {
+            contextText: '',
+            sources: [],
+            contextAsOf: new Date().toISOString(),
+            disclaimer: 'No real-time context was available; analysis is based on submitted player data only.'
+        };
+    }
 }
 
 async function callOpenAI(payload) {
@@ -69,34 +85,39 @@ app.post('/api/analyze-trade', async (req, res) => {
     }
     try {
         const { givingPlayers, receivingPlayers, model } = req.body;
-        const payload = {
-            model: model || OPENAI_MODEL,
-            temperature: 0.4,
-            messages: [
-                {
-                    role: 'system',
-                    content:
-                        'You are an expert fantasy football trade analyst. Given players involved in a trade, ' +
-                        "you evaluate it strictly from the perspective of the user's team. " +
-                        'Respond with concise, actionable insight.'
-                },
-                {
-                    role: 'user',
-                    content:
-                        'You are analyzing a fantasy football trade. ' +
-                        'The players my team is GIVING and RECEIVING are provided below as JSON. ' +
-                        'Each player has name, position, and a numeric rating (higher is better).\n\n' +
-                        'GIVING:\n' +
-                        JSON.stringify(givingPlayers || [], null, 2) +
-                        '\n\nRECEIVING:\n' +
-                        JSON.stringify(receivingPlayers || [], null, 2) +
-                        '\n\n' +
-                        'Return ONLY a JSON object (no extra text) with this shape:\n' +
-                        '{\n  "fairness": "Favorable" | "Fair" | "Unfavorable",\n  "grade": number,\n  "summary": string\n}'
-                }
-            ]
-        };
-        const data = await callOpenAI(payload);
+        const allPlayers = [...(givingPlayers || []), ...(receivingPlayers || [])];
+        const ctx = await buildContextSafely(allPlayers);
+        const contextBlock = formatContextBlock(ctx);
+
+        const messages = [
+            {
+                role: 'system',
+                content:
+                    'You are an expert fantasy football trade analyst. Given players involved in a trade, ' +
+                    "you evaluate it strictly from the perspective of the user's team. " +
+                    'Respond with concise, actionable insight. ' +
+                    'Use the CURRENT CONTEXT block (when present) for time-sensitive facts; if a fact is not in the context, say so plainly rather than guessing.'
+            }
+        ];
+        if (contextBlock) {
+            messages.push({ role: 'system', content: contextBlock });
+        }
+        messages.push({
+            role: 'user',
+            content:
+                'You are analyzing a fantasy football trade. ' +
+                'The players my team is GIVING and RECEIVING are provided below as JSON. ' +
+                'Each player has name, position, and a numeric rating (higher is better).\n\n' +
+                'GIVING:\n' +
+                JSON.stringify(givingPlayers || [], null, 2) +
+                '\n\nRECEIVING:\n' +
+                JSON.stringify(receivingPlayers || [], null, 2) +
+                '\n\n' +
+                'Return ONLY a JSON object (no extra text) with this shape:\n' +
+                '{\n  "fairness": "Favorable" | "Fair" | "Unfavorable",\n  "grade": number,\n  "summary": string\n}'
+        });
+
+        const data = await callOpenAI({ model: model || OPENAI_MODEL, temperature: 0.4, messages });
         const content = data?.choices?.[0]?.message?.content || '';
         let parsed;
         try {
@@ -107,7 +128,10 @@ app.post('/api/analyze-trade', async (req, res) => {
         res.json({
             fairness: parsed.fairness || 'Fair',
             grade: typeof parsed.grade === 'number' ? parsed.grade : 50,
-            summary: parsed.summary || ''
+            summary: parsed.summary || '',
+            contextAsOf: ctx.contextAsOf,
+            sources: ctx.sources,
+            disclaimer: ctx.disclaimer
         });
     } catch (err) {
         console.error('analyze-trade error:', err);
@@ -121,43 +145,48 @@ app.post('/api/analyze-team', async (req, res) => {
     }
     try {
         const { lineupPlayers, benchPlayers, model } = req.body;
-        const payload = {
-            model: model || OPENAI_MODEL,
-            temperature: 0.4,
-            messages: [
-                {
-                    role: 'system',
-                    content:
-                        'You are an expert fantasy football analyst. Given a starting lineup and bench, ' +
-                        'you provide actionable advice. Respond with valid JSON only.'
-                },
-                {
-                    role: 'user',
-                    content:
-                        'Analyze this fantasy football roster.\n\nSTARTING LINEUP:\n' +
-                        JSON.stringify(lineupPlayers || [], null, 2) +
-                        '\n\nBENCH:\n' +
-                        JSON.stringify(benchPlayers || [], null, 2) +
-                        '\n\nReturn ONLY a JSON object with this exact shape:\n' +
-                        '{\n' +
-                        '  "strengths": string[],\n' +
-                        '  "weaknesses": string[],\n' +
-                        '  "tradeTargets": string[],\n' +
-                        '  "tradeAway": string[],\n' +
-                        '  "dropCandidates": string[],\n' +
-                        '  "overallSummary": string,\n' +
-                        '  "nextActions": string[]\n' +
-                        '}\n\n' +
-                        'Rules:\n' +
-                        '- Each array (except the summary field) should contain 3 to 5 short, scannable bullet-style items, not paragraphs.\n' +
-                        '- Keep every item concise and specific.\n' +
-                        '- "overallSummary" must be 2 to 4 sentences: high-level roster overview (strength/weakness theme) in plain language.\n' +
-                        '- "nextActions" must be 3 to 6 short imperative items the manager should do this week (e.g. start/sit, waiver adds, trade talks, who to cut). No duplication of the bullet lists; focus on decisions and priorities.\n' +
-                        '- Return valid JSON only. No markdown, no code fences, no extra text.'
-                }
-            ]
-        };
-        const data = await callOpenAI(payload);
+        const allPlayers = [...(lineupPlayers || []), ...(benchPlayers || [])];
+        const ctx = await buildContextSafely(allPlayers);
+        const contextBlock = formatContextBlock(ctx);
+
+        const messages = [
+            {
+                role: 'system',
+                content:
+                    'You are an expert fantasy football analyst. Given a starting lineup and bench, ' +
+                    'you provide actionable advice. Respond with valid JSON only. ' +
+                    'Use the CURRENT CONTEXT block (when present) for time-sensitive facts; if a fact is not in the context, say so plainly rather than guessing.'
+            }
+        ];
+        if (contextBlock) {
+            messages.push({ role: 'system', content: contextBlock });
+        }
+        messages.push({
+            role: 'user',
+            content:
+                'Analyze this fantasy football roster.\n\nSTARTING LINEUP:\n' +
+                JSON.stringify(lineupPlayers || [], null, 2) +
+                '\n\nBENCH:\n' +
+                JSON.stringify(benchPlayers || [], null, 2) +
+                '\n\nReturn ONLY a JSON object with this exact shape:\n' +
+                '{\n' +
+                '  "strengths": string[],\n' +
+                '  "weaknesses": string[],\n' +
+                '  "tradeTargets": string[],\n' +
+                '  "tradeAway": string[],\n' +
+                '  "dropCandidates": string[],\n' +
+                '  "overallSummary": string,\n' +
+                '  "nextActions": string[]\n' +
+                '}\n\n' +
+                'Rules:\n' +
+                '- Each array (except the summary field) should contain 3 to 5 short, scannable bullet-style items, not paragraphs.\n' +
+                '- Keep every item concise and specific.\n' +
+                '- "overallSummary" must be 2 to 4 sentences: high-level roster overview (strength/weakness theme) in plain language.\n' +
+                '- "nextActions" must be 3 to 6 short imperative items the manager should do this week (e.g. start/sit, waiver adds, trade talks, who to cut). No duplication of the bullet lists; focus on decisions and priorities.\n' +
+                '- Return valid JSON only. No markdown, no code fences, no extra text.'
+        });
+
+        const data = await callOpenAI({ model: model || OPENAI_MODEL, temperature: 0.4, messages });
         const content = (data?.choices?.[0]?.message?.content || '').replace(/^```json?\s*|\s*```$/g, '').trim();
         let parsed;
         try {
@@ -188,7 +217,10 @@ app.post('/api/analyze-team', async (req, res) => {
             tradeAway,
             dropCandidates,
             overallSummary,
-            nextActions
+            nextActions,
+            contextAsOf: ctx.contextAsOf,
+            sources: ctx.sources,
+            disclaimer: ctx.disclaimer
         });
     } catch (err) {
         console.error('analyze-team error:', err);
@@ -202,5 +234,10 @@ if (require.main === module) {
     app.listen(PORT, () => {
         console.log(`Server running at http://localhost:${PORT}`);
         if (!OPENAI_API_KEY) console.warn('Set OPENAI_API_KEY in .env for AI features.');
+        const intervalMin = parseInt(process.env.RSS_REFRESH_INTERVAL_MIN || '180', 10);
+        if (intervalMin > 0 && process.env.RSS_DISABLE !== '1') {
+            console.log(`RSS poller starting (every ${intervalMin} min).`);
+            rss.startPoller({ intervalMinutes: intervalMin });
+        }
     });
 }

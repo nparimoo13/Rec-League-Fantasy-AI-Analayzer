@@ -4,6 +4,9 @@
 # Dependencies
 node_modules/
 
+# Runtime caches (RSS, ESPN lookups, search-on-miss)
+data/
+
 # OS
 .DS_Store
 Thumbs.db
